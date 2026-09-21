@@ -160,6 +160,13 @@ class SynthNote {
   int _smRelStart = 0, _smRelLen = 1;
   double _smPanL = 1, _smPanR = 1;
 
+  /// **손을 뗐을 때** 표본을 몇 샘플에 걸쳐 재울 것인가.
+  ///
+  /// 악기마다 다르다 — 뜯는·치는 악기(피아노·기타)는 손을 떼도 줄이 좀 더
+  /// 울어야 자연스럽고(`RING` 의 첫 값), 켜는·부는 악기(바이올린·색소폰)는
+  /// 활·숨이 멎으면 바로 멎는다. 시작할 때 정해 두고 `release()` 가 쓴다.
+  int _smRelHold = 1;
+
   /// 부분음 자리를 잡는다. 자리 번호를 돌려주므로, 자기 엔벨로프가 필요한 층은
   /// `_pEnv[번호]` 를 받아서 채우면 된다(새로 만들지 않는다).
   int _addPart(
@@ -219,7 +226,7 @@ class SynthNote {
     // 악기, 그리고 표본을 못 불러온 상황) 그대로 아래 합성 경로로 간다.
     final bank = kSampleBanks[voice];
     if (bank != null) {
-      _startSample(bank, freq, dur, vel, soft, kSamplePan[voice] ?? 0.0);
+      _startSample(bank, freq, dur, vel, soft, kSamplePan[voice] ?? 0.0, voice);
       return;
     }
     // 표본팩 악기인데 아직 안 읽었으면 지금 트리거한다(끝날 때까지 이번
@@ -644,6 +651,7 @@ class SynthNote {
     int vel,
     bool soft,
     double pan,
+    String voice,
   ) {
     final c = bank.pick(vel, freq);
     _sampleMode = true;
@@ -654,6 +662,13 @@ class SynthNote {
     _smGain = (VG[vel] ?? 0.6) * (soft ? 0.82 : 1.0);
     _smRelLen = (0.08 * kSampleRate).round(); // 80ms — 손 뗀 순간의 클릭을 없앤다
     _smRelStart = math.max(_smRelLen, (dur * kSampleRate).round());
+    // 손을 뗐을 때 쓸 길이. 뜯는·치는 악기는 줄이 좀 더 울어야 자연스럽다
+    // (`RING` 의 첫 값 = 그 악기의 기본 릴리즈). 표에 없는 켜는·부는 악기는
+    // 활·숨이 멎으면 바로 멎으므로 80ms 그대로.
+    final ring = RING[voice];
+    _smRelHold = ring == null
+        ? _smRelLen
+        : math.max(_smRelLen, (ring[0] * kSampleRate).round());
     // 등파워 패닝 — **`sqrt2` 로 보정한다**(드럼과 같은 방식, `drums.dart` 의
     // `_setPan` 참고). 안 하면 가운데(pan=0)가 두 채널 다 0.707배로
     // 조용해지고, 오른쪽으로 15%만 틀어도(바이올린 0.35) 왼쪽 채널이
@@ -711,6 +726,22 @@ class SynthNote {
   /// 소리는 멎었는데 목소리는 계속 물고 있어서, 빨리 여러 번 치면 목소리가 바닥난다.
   void release() {
     if (!active) return;
+    // ── 표본 경로는 **따로 재워야 한다** (2026-09-22) ──
+    //
+    // `_nextSample` 은 `_env` 도 `_life` 도 안 읽고, `_life` 를 깎는 줄(아래
+    // 합성 경로)도 `next()` 가 표본일 때 먼저 `return` 해서 안 탄다. 그래서
+    // 여기서 엔벨로프만 놓아 봐야 **표본에는 아무 일도 안 일어났다** —
+    // 손을 떼도 그 표본이 끝까지(길면 몇 초) 그대로 울었고, 빨리 연타하면
+    // 안 꺼진 음이 겹겹이 쌓여 뭉갰다. `_startSample` 의 머리말이 "손을 늦게
+    // 뗀 라이브 연주는 짧게 눌러 끈다"고 적어 둔 그 동작이 배선만 빠져 있었다.
+    //
+    // `math.min` 이어야 한다 — 그냥 대입하면 이미 잦아들던 음에 release 가
+    // 한 번 더 왔을 때 페이드가 처음으로 되감긴다.
+    if (_sampleMode) {
+      _smRelLen = _smRelHold < 1 ? 1 : _smRelHold;
+      if (_age < _smRelStart) _smRelStart = _age;
+      return;
+    }
     _env.release();
     final left = _env.releaseSamples + (0.05 * kSampleRate).round();
     if (left < _life) _life = left;
