@@ -1,0 +1,130 @@
+name: music_doodle_engine
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+# The following defines the version and build number for your application.
+# A version number is three numbers separated by dots, like 1.2.43
+# followed by an optional build number separated by a +.
+# Both the version and the builder number may be overridden in flutter
+# build by specifying --build-name and --build-number, respectively.
+# In Android, build-name is used as versionName while build-number used as versionCode.
+# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
+# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
+# Read more about iOS versioning at
+# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
+# In Windows, build-name is used as the major, minor, and patch parts
+# of the product and file versions while build-number is used as the build suffix.
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.8
+  # 프로젝트 안으로 복사해서 고쳐 쓴다 (packages/flutter_pcm_sound).
+  # 원본 3.3.3 은 AudioTrack 을 만들 때 performance mode 를 지정하지 않아
+  # 안드로이드 저지연 경로(fast mixer)를 못 탄다. 건반 지연이 그대로 느껴진다.
+  # 수정 내용은 그 폴더의 FlutterPcmSoundPlugin.java 주석 참고.
+  flutter_pcm_sound:
+    path: packages/flutter_pcm_sound
+
+  # 5단계 8/N — 만든 곡을 앱을 껐다 켜도 남기려면 저장할 곳이 필요하다.
+  # 앱 전용 폴더 경로를 얻는 표준 플러그인(파일로 저장한다 — 프로젝트가 커지면
+  # 설정 저장소보다 파일이 맞고, 나중에 내보내기/가져오기로 이어진다).
+  path_provider: ^2.1.4
+
+  # 5단계 9/N — 만든 곡을 **밖으로 꺼내려면** 공유 시트가 필요하다.
+  # 앱 안에만 있는 음악은 아무도 못 듣는다(=아무도 이 앱을 모른다).
+  share_plus: ^10.1.2
+
+  # 「파일로 꺼내기」의 **짝**. 꺼내기만 있으면 백업이 반쪽이다 —
+  # 폰을 바꾼 사람이 카톡에 보관해 둔 곡 파일을 다시 열 길이 없었다.
+  # 안드로이드에서 파일 하나를 고르는 표준 창을 여는 데 필요하다
+  # (앱이 남의 폴더를 마음대로 읽을 수는 없다 — 사용자가 직접 골라야 한다).
+  #
+  # **12 로 못 올린다** — 12는 windows_file_picker 를 거쳐 win32 ^6 을 요구하는데
+  # share_plus ^10 은 win32 ^5 를 쓴다. share_plus 를 13 으로 올리면 풀리지만
+  # 거기서 `Share.shareXFiles` 가 없어져 「파일로 꺼내기」를 다시 써야 한다 —
+  # 잘 도는 것을 건드릴 이유가 없다.
+  file_picker: ^8.3.7
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # The "flutter_lints" package below contains a set of recommended lints to
+  # encourage good coding practices. The lint set provided by the package is
+  # activated in the `analysis_options.yaml` file located at the root of your
+  # package. See that file for information about deactivating specific lint
+  # rules and activating additional ones.
+  flutter_lints: ^6.0.0
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The following line ensures that the Material Icons font is
+  # included with your application, so that you can use the icons in
+  # the material Icons class.
+  uses-material-design: true
+
+  # 악기 품질 1단계 — 피아노는 표본(실제 녹음)으로 친다(University of Iowa
+  # Electronic Music Studios, 상업적 사용 제한 없음). 신스로 흉내 내지 않는다.
+  assets:
+    - assets/samples/piano/
+    - assets/samples/violin/
+    - assets/samples/trumpet/
+    - assets/samples/cello/
+    - assets/samples/guitar/
+    - assets/samples/fingerbass/
+    - assets/samples/drum_kick/
+    - assets/samples/drum_snare/
+    - assets/samples/drum_hatClosed/
+    - assets/samples/drum_hatOpen/
+    - assets/samples/drum_crash/
+    - assets/samples/drum_ride/
+    - assets/samples/drum_tom/
+    - assets/samples/upright/
+    - assets/samples/sax/
+    - assets/samples/epiano/
+
+  # An image asset can refer to one or more resolution-specific "variants", see
+  # https://flutter.dev/to/resolution-aware-images
+
+  # For details regarding adding assets from package dependencies, see
+  # https://flutter.dev/to/asset-from-package
+
+  # To add custom fonts to your application, add a fonts section here,
+  # in this "flutter" section. Each entry in this list should have a
+  # "family" key with the font family name, and a "fonts" key with a
+  # list giving the asset and other descriptors for the font. For
+  # example:
+  # fonts:
+  #   - family: Schyler
+  #     fonts:
+  #       - asset: fonts/Schyler-Regular.ttf
+  #       - asset: fonts/Schyler-Italic.ttf
+  #         style: italic
+  #   - family: Trajan Pro
+  #     fonts:
+  #       - asset: fonts/TrajanPro.ttf
+  #       - asset: fonts/TrajanPro_Bold.ttf
+  #         weight: 700
+  #
+  # For details regarding fonts from package dependencies,
+  # see https://flutter.dev/to/font-from-package
