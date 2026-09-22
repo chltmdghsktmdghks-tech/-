@@ -493,6 +493,27 @@ class _EditorViewState extends State<EditorView> {
     return i < 0 ? null : _notes[i];
   }
 
+  /// 그 칸을 **덮고 있는** 음. 음은 `[도수, 시작칸, 길이, …]` 라 한 칸이 아니라
+  /// 여러 칸에 걸쳐 있다.
+  ///
+  /// 여태 손끝 판정이 [_noteAt] (= **시작 칸이 정확히 같은 것**)만 봤다.
+  /// 그래서 4칸짜리 음의 3번째 칸을 누르면 **빈 칸으로 읽혀 그 위에 새 음을
+  /// 하나 더 깔았다**(사용자 신고, 2026-09-22: "긴 블럭의 중간 부분을 길게
+  /// 누르면 그 블럭을 잡아야지 왜 새로 생성되니"). 눈에는 한 덩어리로 보이는데
+  /// 만질 수 있는 곳은 왼쪽 끝 한 칸뿐이었던 셈이다.
+  ///
+  /// 잡은 뒤에 쓰는 값은 **그 음의 시작 칸**이어야 한다 — 길이 고치기
+  /// (`NoteOps.setLen`)도 줄 옮기기도 시작 칸으로 음을 찾는다.
+  List<Object?>? _noteCovering(int degree, int step) {
+    for (final n in _notes) {
+      if (n[0] != degree) continue;
+      final s = n[1] as int;
+      final len = n[2] as int;
+      if (step >= s && step < s + len) return n;
+    }
+    return null;
+  }
+
   /// 고치기 직전에 부른다 — **지금 판을 복사해서** 쌓는다.
   /// 얕은 복사면 안 된다(같은 목록을 가리키면 되돌려도 그대로다).
   void _snapshot() {
@@ -869,24 +890,28 @@ class _EditorViewState extends State<EditorView> {
 
   void _tapNote(int degree, int step) {
     _holdFollow(); // 고치는 중엔 화면이 저 혼자 넘어가면 안 된다
+    // **덮고 있는 음**을 본다 — 긴 음의 가운데를 눌러도 그 음이 잡혀야 한다
+    // (`_noteCovering` 주석). 잡은 뒤에 쓰는 칸은 그 음의 **시작 칸**이다.
+    final found = _noteCovering(degree, step);
+    final hit = found == null ? step : found[1] as int;
     if (_erase) {
-      if (_noteAt(degree, step) == null) return;
+      if (found == null) return;
       _snapshot();
-      _eraseAt(null, degree, step);
+      _eraseAt(null, degree, hit);
       return;
     }
     final sel = _sel;
     // 고르기만 한 것은 되돌릴 거리가 아니다 — `_tapDrum` 과 같은 이유다.
-    if (_noteAt(degree, step) != null) {
+    if (found != null) {
       if (sel != null &&
           sel.lane == null &&
           sel.degree == degree &&
-          sel.step == step) {
+          sel.step == hit) {
         _snapshot();
         _sel = null; // 고른 걸 다시 누르면 지운다
-        _writeNotes(NoteOps.remove(_notes, degree, step));
+        _writeNotes(NoteOps.remove(_notes, degree, hit));
       } else {
-        setState(() => _sel = _Sel(degree: degree, step: step));
+        setState(() => _sel = _Sel(degree: degree, step: hit));
       }
       return;
     }
@@ -1067,9 +1092,9 @@ class _EditorViewState extends State<EditorView> {
     final degree = rows - 1 - rowFromTop;
     final lane = isDrum ? kDrumLanes[rowFromTop] : null;
 
-    final has = isDrum
-        ? _drum.indexOf(lane!, step) >= 0
-        : _noteAt(degree, step) != null;
+    // 드럼은 한 칸짜리 타격이라 덮는 범위가 없다. 음 줄만 **덮고 있는 음**을 본다.
+    final found = isDrum ? null : _noteCovering(degree, step);
+    final has = isDrum ? _drum.indexOf(lane!, step) >= 0 : found != null;
 
     _snapshot(); // 끄는 동안은 한 번만 쌓는다 — 한 번에 되돌아가야 한다
     if (_erase) {
@@ -1089,15 +1114,19 @@ class _EditorViewState extends State<EditorView> {
       // **손끝에 잡히는 느낌** — 꾹 눌러 잡은 순간을 손으로도 알려 준다.
       // 이 뒤로 끌면(옆=길이·위아래=높낮이) 무엇을 잡았는지 눈으로 안 봐도 안다.
       HapticFeedback.selectionClick();
+      // **잡는 값은 그 음의 시작 칸**이다 — 가운데를 잡았어도 길이 고치기·줄
+      // 옮기기는 시작 칸으로 음을 찾는다. 누른 칸을 그대로 쓰면 엉뚱한 자리를
+      // 고치거나 아무 일도 안 일어난다.
+      final startStep = isDrum ? step : found![1] as int;
       _drag = _Drag(
         paint: false,
         at: at,
         lane: lane,
         degree: degree,
-        step: step,
-        len0: isDrum ? 1 : (_noteAt(degree, step)![2] as int),
+        step: startStep,
+        len0: isDrum ? 1 : (found![2] as int),
       );
-      setState(() => _sel = _Sel(lane: lane, degree: degree, step: step));
+      setState(() => _sel = _Sel(lane: lane, degree: degree, step: startStep));
     } else {
       // 빈 칸 — 여기서부터 **깔기** 시작
       _drag = _Drag(
@@ -1219,9 +1248,12 @@ class _EditorViewState extends State<EditorView> {
       _writeDrum(d);
       return;
     }
-    if (_noteAt(degree, step) == null) return;
+    // 긴 음은 **어느 칸을 훑어도** 지워져야 한다 — 시작 칸만 보면 지우개로
+    // 가운데를 문질러도 안 지워지고 "고장난 지우개"가 된다.
+    final hit = _noteCovering(degree, step);
+    if (hit == null) return;
     _sel = null;
-    _writeNotes(NoteOps.remove(_notes, degree, step));
+    _writeNotes(NoteOps.remove(_notes, degree, hit[1] as int));
   }
 
   void _paintAt(String? lane, int degree, int step) {
@@ -1233,6 +1265,10 @@ class _EditorViewState extends State<EditorView> {
       _writeDrum(d);
       return;
     }
+    // **여기는 일부러 시작 칸만 본다.** 「끌면 쫘르륵 깔린다」가 지나간 칸마다
+    // 하나씩 찍는 동작이라(`editor_ui_test.dart` 10번), 덮인 칸을 건너뛰게 하면
+    // 기본 길이가 2칸이므로 한 칸 걸러 하나만 찍힌다 — 끌어 깐 줄이 성겨진다.
+    // 잡기·지우기와 달리 여기만 규칙이 다른 이유다.
     if (_noteAt(degree, step) != null) return;
     _sel = _Sel(degree: degree, step: step);
     _writeNotes(
