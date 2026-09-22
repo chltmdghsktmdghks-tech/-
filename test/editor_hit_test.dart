@@ -18,7 +18,9 @@ import 'package:flutter_test/flutter_test.dart';
 /// (화면 상태 클래스는 private 이라 여기서 규칙만 그대로 옮겨 잰다 —
 ///  둘이 어긋나면 이 시험이 뜻을 잃으므로, 저쪽을 고치면 여기도 고친다)
 List<Object?>? noteCovering(List<List<Object?>> notes, int degree, int step) {
-  for (final n in notes) {
+  // **뒤에서부터** — 그리는 쪽(Stack)이 뒤쪽 음을 위에 그린다.
+  for (var i = notes.length - 1; i >= 0; i--) {
+    final n = notes[i];
     if (n[0] != degree) continue;
     final s = n[1] as int;
     final len = n[2] as int;
@@ -115,6 +117,23 @@ void main() {
       expect(noteCovering(many, 7, 6), isNull, reason: '두 음 사이 빈 칸');
       expect(noteCovering(many, 7, 8)![1], 8);
       expect(noteCovering(many, 7, 15)![1], 8);
+    });
+  });
+
+  group('겹친 자리는 **위에 그려진** 음이 잡힌다', () {
+    // 「쫘르륵 깔기」가 만드는 모양 — 이웃끼리 1칸씩 겹친다.
+    final lapped = <List<Object?>>[
+      [7, 2, 2, 2],
+      [7, 3, 2, 2],
+    ];
+    test('겹친 칸에서는 뒤쪽(위) 음', () {
+      expect(noteCovering(lapped, 7, 3)![1], 3,
+          reason: '앞쪽을 돌려주면 눈에 보이는 막대와 잡히는 음이 다르다');
+    });
+    test('안 겹친 칸은 제 것을 잡는다', () {
+      expect(noteCovering(lapped, 7, 2)![1], 2);
+      expect(noteCovering(lapped, 7, 4)![1], 3);
+      expect(noteCovering(lapped, 7, 5), isNull);
     });
   });
 }

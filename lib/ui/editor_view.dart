@@ -504,8 +504,17 @@ class _EditorViewState extends State<EditorView> {
   ///
   /// 잡은 뒤에 쓰는 값은 **그 음의 시작 칸**이어야 한다 — 길이 고치기
   /// (`NoteOps.setLen`)도 줄 옮기기도 시작 칸으로 음을 찾는다.
+  /// **뒤에서부터** 찾는다 — 겹친 자리에서는 위에 그려진 음이 잡혀야 한다.
+  ///
+  /// 「끌면 쫘르륵 깔린다」는 칸마다 기본 길이 2칸으로 찍으므로 이웃끼리
+  /// **1칸씩 겹친다**(의도된 동작 — `editor_ui_test.dart` 10번). 그리는 쪽
+  /// (`_GridRow` 의 `Stack`)은 목록 **뒤쪽 음을 위에** 그린다. 그래서 앞에서부터
+  /// 찾으면 **눈에 보이는 막대를 눌렀는데 그 밑에 깔린 왼쪽 음이 잡힌다** —
+  /// 겹친 칸을 두 번 눌러 지우면 엉뚱한 음이 사라졌다.
+  /// (이 화면을 고치면서 잠깐 그렇게 만들었다가 시험으로 잡았다)
   List<Object?>? _noteCovering(int degree, int step) {
-    for (final n in _notes) {
+    for (var i = _notes.length - 1; i >= 0; i--) {
+      final n = _notes[i];
       if (n[0] != degree) continue;
       final s = n[1] as int;
       final len = n[2] as int;
@@ -2016,6 +2025,8 @@ class _NoteBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final a = vel <= 1 ? 0.42 : (vel == 2 ? 0.72 : 1.0);
     return GestureDetector(
+      // 위아래 1px 여백까지 과녁에 넣는다(위 `_Cell` 과 같은 이유).
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 1),
@@ -2115,6 +2126,11 @@ class _Cell extends StatelessWidget {
     final on = vel > 0;
     final a = vel <= 1 ? 0.42 : (vel == 2 ? 0.72 : 1.0);
     return GestureDetector(
+      // **칸 전체가 과녁이다.** 기본값(`deferToChild`)이면 아래 `Container` 의
+      // 1px 여백 띠가 손끝을 안 받는다 — 30px 칸에서 양옆 1px 씩이라 경계
+      // 가까이를 누르면 **아무 일도 안 일어난다**(같은 자리를 꾹 누르면 되는데,
+      // 그게 더 헷갈린다). 폰에서 손가락은 칸보다 굵다.
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: Container(
         // 여백까지 합쳐 딱 `_kCell` 이어야 한다 — 여기가 32px 이면 칸은 32px 씩

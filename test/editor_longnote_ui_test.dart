@@ -185,4 +185,100 @@ void main() {
     print('가운데 두 번째 탭 — 음 ${ns().length}개');
     expect(ns().length, 0, reason: '고른 걸 다시 누르면 지워진다');
   });
+
+  testWidgets('겹친 줄에서 **보이는 막대**가 잡힌다 — 왼쪽 것이 아니라', (tester) async {
+    // 「끌면 쫘르륵 깔린다」는 칸마다 기본 길이 2칸으로 찍으므로 이웃끼리
+    // **1칸씩 겹친다**(의도된 동작 — `editor_ui_test.dart` 10번).
+    // 그리는 쪽(`_GridRow` 의 Stack)은 목록 **뒤쪽 음을 위에** 그린다.
+    // 그러니 손끝 판정도 뒤쪽을 잡아야 눈과 손이 같은 것을 가리킨다.
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final p = Project.initial()..setGenre('lofi');
+    final mel = p.tracks.firstWhere((t) => t.type == 'melody');
+    final nm = mel.pattern!;
+    const rows = 15;
+    const deg = 10;
+    const rowFromTop = rows - 1 - deg;
+    // 2~3칸 음과 3~4칸 음 — **3번 칸이 겹친다.** 위에 보이는 건 뒤쪽(3번 시작).
+    p.putUserPattern(
+      'melody',
+      nm,
+      note: NotePatternDef(nm, 2, 2, const [
+        [deg, 2, 2, 2],
+        [deg, 3, 2, 2],
+      ]),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: EditorView(
+            project: p,
+            transport: Transport(),
+            track: mel,
+            host: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    List<List<Object?>> ns() => p.findNote('melody', nm)!.notes;
+
+    // 겹친 3번 칸을 두 번 탭 = 고르고 지우기.
+    await tester.tapAt(_cell(tester, rowFromTop, 3, rows));
+    await tester.pump();
+    await tester.tapAt(_cell(tester, rowFromTop, 3, rows));
+    await tester.pump();
+
+    // ignore: avoid_print
+    print('겹친 칸 두 번 탭 — 남은 음 ${ns()}');
+    expect(ns().length, 1, reason: '하나만 지워져야 한다');
+    expect(ns().first[1], 2,
+        reason: '위에 보이던 3번 음이 지워지고 **2번 음이 남아야** 한다 '
+            '— 3번이 남았다면 눈에 안 보이던 왼쪽 음을 지운 것이다');
+  });
+
+  testWidgets('칸 경계를 눌러도 찍힌다 — 여백 1px 이 과녁에서 빠지면 안 된다', (tester) async {
+    // `_Cell` 의 `Container` 에는 1px 여백이 있다. `GestureDetector` 가
+    // 기본값(`deferToChild`)이면 그 띠는 손끝을 **안 받는다** — 30px 칸에서
+    // 양옆 1px 씩이라 경계 가까이를 누르면 아무 일도 안 일어난다.
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final p = Project.initial()..setGenre('lofi');
+    final mel = p.tracks.firstWhere((t) => t.type == 'melody');
+    final nm = mel.pattern!;
+    const rows = 15;
+    const deg = 10;
+    const rowFromTop = rows - 1 - deg;
+    p.putUserPattern('melody', nm, note: NotePatternDef(nm, 2, 2, const []));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: Scaffold(
+          body: EditorView(
+            project: p,
+            transport: Transport(),
+            track: mel,
+            host: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    List<List<Object?>> ns() => p.findNote('melody', nm)!.notes;
+
+    // 4번 칸의 **왼쪽 끝에서 0.5px** — 여백 띠 위다.
+    final c = _cell(tester, rowFromTop, 4, rows);
+    await tester.tapAt(Offset(c.dx - _kCell / 2 + 0.5, c.dy));
+    await tester.pump();
+    // ignore: avoid_print
+    print('칸 왼쪽 끝 탭 — 음 ${ns().length}개 ${ns()}');
+    expect(ns().length, 1, reason: '칸 경계가 과녁에서 빠져 있다');
+  });
 }
