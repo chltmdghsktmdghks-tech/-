@@ -658,8 +658,14 @@ class SynthNote {
     _smPcm = c.pcm;
     _smPos = 0;
     _smRatio = freq / c.rootFreq * (c.sampleRate / kSampleRate);
-    // 세기별 음량은 신스와 같은 표(VG) — 표본이라고 세기 감각이 달라지면 안 된다.
-    _smGain = (VG[vel] ?? 0.6) * (soft ? 0.82 : 1.0);
+    // 세기별 음량 — **녹음이 세기를 이미 담고 있는 악기는 완만한 표**를 쓴다
+    // (`kRealVelSamples`). 신스용 VG 를 그대로 곱하면 첼로·바이올린의 여리게가
+    // −43dB 까지 내려가 안 들렸다. 거기에 악기별 음량 맞추기(`kSampleTrim`)를
+    // 곱한다 — 녹음 레벨이 33dB 까지 벌어져 있어서 안 맞추면 한 밴드가 안 된다.
+    final vg = kRealVelSamples.contains(voice)
+        ? (kSampleVG[vel] ?? 0.9)
+        : (VG[vel] ?? 0.6);
+    _smGain = vg * (kSampleTrim[voice] ?? 1.0) * (soft ? 0.82 : 1.0);
     _smRelLen = (0.08 * kSampleRate).round(); // 80ms — 손 뗀 순간의 클릭을 없앤다
     _smRelStart = math.max(_smRelLen, (dur * kSampleRate).round());
     // 손을 뗐을 때 쓸 길이. 뜯는·치는 악기는 줄이 좀 더 울어야 자연스럽다

@@ -590,7 +590,10 @@ class _HomeViewState extends State<HomeView> {
           children: [
             const Expanded(
               child: Text(
-                '프로젝트를 고르면 씬·타임라인·라이브·쇼를 한 화면에서 오갈 수 있어요.',
+                // 「사용법」 버튼이 폭을 가져가므로 **한 줄에 들어가는 길이**로
+                // 둔다. 두 줄이 되면 둘째 줄이 화면 밖으로 잘렸다(실기기 확인,
+                // 2026-09-22 — "…오갈 수 있어" 다음 "요"가 안 보였다).
+                '씬·타임라인·라이브·쇼를 오갈 수 있어요.',
                 style: TextStyle(fontSize: 12, color: Colors.white38),
               ),
             ),
@@ -607,7 +610,8 @@ class _HomeViewState extends State<HomeView> {
             ),
           ],
         ),
-        const SizedBox(height: 10),
+        // 화면 맨 아래에 붙으면 글자가 잘린다 — 여유를 둔다.
+        const SizedBox(height: 24),
         if (!simple)
           Center(
             child: TextButton.icon(

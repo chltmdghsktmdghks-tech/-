@@ -1167,6 +1167,46 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
 
   void _retake() => setState(_armStage);
 
+  /// **그만하고 나가기.** 이미 「사용하기」로 넘긴 단계는 씬에 남아 있고,
+  /// 지금 치던 판만 버려진다 — 그걸 그대로 적어서 알려 준다.
+  ///
+  /// 다 끝냈으면 묻지 않고 바로 나간다(물어볼 것이 없다).
+  Future<void> _confirmExit() async {
+    if (_allDone) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final kept = _stage; // 「사용하기」까지 누른 단계 수
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1C20),
+        title: const Text('그만할까요?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          kept == 0
+              ? '아직 아무것도 안 남겼어요. 지금 나가면 이 씬은 그대로입니다.'
+              : '$kept개(${kDoodleStages.take(kept).map((s) => s.label).join(' · ')})는 '
+                    '이미 씬에 남았어요.\n지금 치던 ${_stageDef.label}만 버려집니다.',
+          style: const TextStyle(color: Colors.white70, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('계속하기'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text(
+              '그만하기',
+              style: TextStyle(color: Colors.redAccent),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) Navigator.of(context).pop();
+  }
+
   /// 방금 친 것을 **판에 적는다.** 「사용하기」와 「다듬기」가 같이 쓴다 —
   /// 예전엔 「사용하기」에만 있어서, 치자마자 「다듬기」를 누르면 편집기가
   /// **빈 판**으로 열렸다(방금 친 게 아직 `_pending` 에만 있었다). 치고 나서
@@ -1298,7 +1338,18 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     return PopScope(
       // 연주 도중 실수로 뒤로 나가 방금 것을 잃지 않게 — 명시적으로만 나간다
       // (지시서 32번: "실수로 다른 악기로 넘어가는 일이 없어야 한다").
+      //
+      // **다만 막기만 하면 안 된다** (2026-09-22 실기기에서 잡았다): 여태
+      // `canPop:false` 뿐이라 X 도 뒤로가기도 아무 일을 안 했다 — 다섯 단계를
+      // 다 끝내기 전에는 **나갈 길이 아예 없었다.** 게다가 이 화면에 있는 동안은
+      // 씬의 다른 트랙을 재워 두므로, 갇힌 사람이 앱을 강제 종료하면 `dispose`
+      // 의 복구가 안 돌고 자동 저장이 **음소거된 채로** 파일에 쓴다.
+      // 그래서 이제는 묻고 나간다.
       canPop: _allDone,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _confirmExit();
+      },
       child: Scaffold(
         backgroundColor: const Color(0xFF101114),
         body: SafeArea(
@@ -1315,7 +1366,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         children: [
           IconButton(
             tooltip: '그만하고 나가기',
-            onPressed: () => Navigator.of(context).maybePop(),
+            onPressed: _confirmExit,
             icon: const Icon(Icons.close, color: Colors.white54),
           ),
           Expanded(

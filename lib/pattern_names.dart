@@ -124,7 +124,28 @@ const Map<String, String> kPatternWhole = {'Call & Answer': '묻고 답하기'};
 ///
 /// 보기: `Lofi Walk C` → `로파이 워킹 · 코러스용`
 ///       `Amb Pad A`   → `엠비언트 패드 A`
+/// 두들플레이가 만든 판의 **사람이 읽는 이름**. 아니면 null.
+///
+/// 그 화면은 겹치지 않으려고 `doodle_drum_1790002094977` 처럼 시각을 붙여
+/// 이름을 짓는다. 그게 씬 화면 트랙 줄에 **그대로 보였다**(실기기 확인,
+/// 2026-09-22) — 비개발자에게는 그냥 고장난 글자다. 판 이름 자체는 못 바꾼다
+/// (저장된 곡들이 그 이름으로 서로를 가리킨다). 보여 줄 때만 바꾼다.
+String? doodleLabel(String name) {
+  if (!name.startsWith('doodle_')) return null;
+  const kind = {
+    'drum': '드럼',
+    'bass': '베이스',
+    'chord': '코드',
+    'melody': '가락',
+  };
+  final parts = name.split('_');
+  final k = parts.length > 1 ? kind[parts[1]] : null;
+  return k == null ? '두드린 판' : '두드린 $k';
+}
+
 String patternLabel(String name) {
+  final doodle = doodleLabel(name);
+  if (doodle != null) return doodle;
   final whole = kPatternWhole[name];
   if (whole != null) return whole;
 
@@ -148,6 +169,8 @@ String patternLabel(String name) {
 /// 보기: `Lofi Walk C` → `워킹 코러스` · `Lofi Chorus` → `코러스`
 /// 한 곡은 스타일 하나다 — 트랙 네 줄에 「로파이」 가 네 번 나올 이유가 없다.
 String patternShort(String name) {
+  final doodle = doodleLabel(name);
+  if (doodle != null) return doodle;
   if (kPatternWhole.containsKey(name)) return kPatternWhole[name]!;
 
   var parts = name.split(' ');
