@@ -341,7 +341,22 @@ class TapClock {
       case TapPhase.wait:
         // 마디 첫 박을 **넘어서는 순간**에 시작한다. 창을 연 그 순간이 마침
         // 첫 박이어도 세지 않는다 — 이미 반쯤 지났을 수 있다.
-        if (p.floor() != beatF.floor() && beatF.floor() % beatsPerBar == 0) {
+        //
+        // ── 판 한 바퀴를 통째로 녹음할 때는 **판 머리에서 시작해야 한다** ──
+        // (사용자 신고, 2026-09-22: "악기 넘어갈 때 씬 처음부터 녹음해야지
+        //  왜 중간부터 들어가는 거야")
+        //
+        // 아무 마디 머리에서나 미리 세기를 시작하면, 4마디 씬에서 3마디째에
+        // 걸렸을 때 3·4·1·2 순으로 녹음된다 — 친 것이 씬의 엉뚱한 자리에
+        // 얹힌다. 녹음 창이 판 한 바퀴와 같으면(`lapBeats >= beatsPerLoop`)
+        // 미리 세기를 **판 끝에서 countBeats 앞**에 시작해, 첫 박이 정확히
+        // 판 0박에 떨어지게 한다.
+        final head = lapBeats >= beatsPerLoop && beatsPerLoop > countBeats;
+        final at = beatF.floor();
+        final ok = head
+            ? at == beatsPerLoop - countBeats
+            : at % beatsPerBar == 0;
+        if (p.floor() != at && ok) {
           phase = TapPhase.count;
           _mark = _run;
         }

@@ -17,6 +17,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show IconData, Icons;
 
+import 'edit_ops.dart' show DrumOps, NoteOps;
 import 'fx.dart' show FxPresetDef, kFxCatalog;
 import 'genres.dart' show genreDef;
 import 'instrument_tone.dart';
@@ -2317,6 +2318,53 @@ class Project extends ChangeNotifier {
 
   /// 코드 자리 하나를 [to] 로 바꾸고 **베이스·멜로디를 같은 만큼 옮긴다.**
   ///
+  /// **이 씬의 한 판을 몇 마디로 할 것인가.**
+  ///
+  /// 씬 길이는 따로 저장된 값이 아니라 **그 씬에서 들리는 제일 긴 패턴**이다
+  /// (`SceneSequencer.sceneLoopBars`). 그래서 "씬을 4마디로" 는 곧 "이 씬이
+  /// 쓰는 판들을 4마디로" 다 — 한 트랙만 바꾸면 제일 긴 것이 그대로 남아
+  /// 아무 일도 안 일어난 것처럼 보인다.
+  ///
+  /// 라이브러리 판은 읽기 전용이라 [makeEditable] 로 **내 판으로 베낀 뒤** 고친다.
+  /// 줄이면 범위 밖 음은 버리고 걸친 꼬리는 자른다(`trimTo`) — 늘릴 때는
+  /// `bars > src` 라 뒤가 **원본의 되풀이**로 채워진다(타일링, `patterns.dart`).
+  ///
+  /// 바뀐 트랙 수를 돌려준다(0이면 아무것도 안 했다).
+  int setSceneBars(int barsWanted) {
+    final nb = barsWanted.clamp(1, 8);
+    var changed = 0;
+    for (final t in tracks) {
+      final clip = scene.clips[t.id];
+      if (clip == null || !audible(t)) continue;
+      if (barsOf(t.type, clip) == nb) continue;
+      final name = makeEditable(t);
+      if (t.type == 'drum') {
+        final def = findDrum(name);
+        if (def == null) continue;
+        final ops = DrumOps.read(def);
+        ops.trimTo(nb * (def.spb));
+        putUserPattern('drum', name, drum: ops.toDef(name, nb));
+      } else {
+        final def = findNote(t.type, name);
+        if (def == null) continue;
+        final limit = nb * def.spb;
+        putUserPattern(
+          t.type,
+          name,
+          note: def.copyWith(
+            bars: nb,
+            src: nb,
+            notes: NoteOps.trimTo(def.notes, limit),
+            also: NoteOps.trimTo(def.also, limit),
+          ),
+        );
+      }
+      changed++;
+    }
+    if (changed > 0) notifyListeners();
+    return changed;
+  }
+
   /// 바뀐 것이 없으면 null. 돌려주는 것은 **되돌리기 표**다 — 씬 지우기와 같은
   /// 방식으로 맞춘다(확인 창 대신 되돌리기).
   /// [mode] 는 지금 곡의 조성('minor'/'major') — **반음 줄 판을 옮길 때** 필요하다

@@ -197,6 +197,19 @@ class _SceneViewState extends State<SceneView> {
   /// 지나야 반영돼서, 씬을 눌러도 아무 일도 안 일어나는 것처럼 보였다(실기기
   /// 확인: "안 넘어가고 반복되던데"). 그때는 다음 판을 기다리지 않고 그 자리에서
   /// 새 씬 루프로 바로 갈아탄다.
+  /// **씬 한 판을 몇 마디로.** 이 씬이 쓰는 판들을 다 같이 바꾼다 —
+  /// 씬 길이는 따로 저장된 값이 아니라 **제일 긴 패턴**이라, 한 트랙만 바꾸면
+  /// 아무 일도 안 일어난 것처럼 보인다(`Project.setSceneBars` 주석 참고).
+  void _setSceneBars(int b) {
+    final changed = widget.project.setSceneBars(b);
+    if (changed == 0) {
+      _say('바꿀 판이 없어요 — 이 씬에 들리는 악기가 없습니다.');
+      return;
+    }
+    setState(() => _bars = b);
+    _refresh(); // 돌고 있으면 다음 판부터 새 길이로
+  }
+
   void _refresh() {
     final host = widget.host;
     if (host == null || !widget.transport.playing) return;
@@ -257,7 +270,12 @@ class _SceneViewState extends State<SceneView> {
         // 재생 위치 — **자기 위젯**이다. 지표가 250ms 마다 오는데 이걸 화면 전체
         // setState 로 받으면 초당 4번씩 트랙 줄까지 다 다시 그린다(4단계에서 EQ 가
         // 느렸던 것과 같은 병).
-        _PlayHead(host: widget.host, bars: _bars, loopSec: _loopSec),
+        _PlayHead(
+          host: widget.host,
+          bars: _bars,
+          loopSec: _loopSec,
+          onBars: _setSceneBars,
+        ),
         Expanded(
           child: AnimatedBuilder(
             animation: widget.project,
@@ -863,18 +881,25 @@ class _PlayHead extends StatelessWidget {
   final AudioClient? host;
   final int bars;
   final double loopSec;
+
+  /// 씬 한 판을 몇 마디로 할지 바꾼다. 돌고 있을 때는 null(막대가 그 자리를 쓴다).
+  final void Function(int bars)? onBars;
   const _PlayHead({
     required this.host,
     required this.bars,
     required this.loopSec,
+    this.onBars,
   });
 
   @override
   Widget build(BuildContext context) {
     final n = bars < 1 ? 1 : bars;
     return SizedBox(
-      // 글자를 키우면 「한 판 4마디」가 두 줄이 되어 34 안에서 잘렸다
-      height: scaled(context, 34),
+      // 글자를 키우면 「한 판 4마디」가 두 줄이 되어 34 안에서 잘렸다.
+      // 마디 ± 버튼이 들어오면서 **과녁 바닥선(세로 32)** 까지 담아야 해서
+      // 42 로 키웠다 — 34 였을 때는 위아래 여백 4씩을 빼면 26밖에 안 남아
+      // 버튼이 눌러도 될 만큼 안 컸다(`test/tap_size_test.dart` 가 잡았다).
+      height: scaled(context, 42),
       child: LoopPosBuilder(
         host: host,
         loopSec: loopSec,
@@ -882,7 +907,7 @@ class _PlayHead extends StatelessWidget {
           final bar = (pos * n).floor().clamp(0, n - 1);
           final beat = ((pos * n * 4).floor() % 4) + 1;
           return Padding(
-            padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
+            padding: const EdgeInsets.fromLTRB(10, 5, 10, 5),
             child: Row(
               children: [
                 SizedBox(
@@ -898,6 +923,21 @@ class _PlayHead extends StatelessWidget {
                     ),
                   ),
                 ),
+                // **돌고 있을 때는 안 보여 준다** — 그 자리를 「3마디 2박」이
+                // 쓰고, 도는 중에 판 길이를 바꾸면 지금 어디인지가 흔들린다.
+                if (!looping && onBars != null) ...[
+                  _BarStep(
+                    icon: Icons.remove,
+                    tip: '한 마디 줄이기',
+                    onTap: n > 1 ? () => onBars!(n - 1) : null,
+                  ),
+                  _BarStep(
+                    icon: Icons.add,
+                    tip: '한 마디 늘리기',
+                    onTap: n < 8 ? () => onBars!(n + 1) : null,
+                  ),
+                  const SizedBox(width: 4),
+                ],
                 for (var i = 0; i < n; i++)
                   Expanded(
                     child: Container(
@@ -1827,4 +1867,35 @@ Future<String?> pickFromSheet(
       ),
     ),
   );
+}
+
+/// 씬 마디 ± 한 칸. 작은 버튼이지만 **과녁은 넉넉히** 둔다(폰이다).
+class _BarStep extends StatelessWidget {
+  final IconData icon;
+  final String tip;
+  final VoidCallback? onTap;
+  const _BarStep({required this.icon, required this.tip, this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    final off = onTap == null;
+    return Tooltip(
+      message: tip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        // **과녁 바닥선**(세로 32 · 가로 28, `test/tap_size_test.dart`)을
+        // 지킨다 — 아이콘은 작아도 누를 자리는 손가락만 해야 한다.
+        child: SizedBox(
+          width: 30,
+          height: 32,
+          child: Icon(
+            icon,
+            size: 16,
+            color: Colors.white.withValues(alpha: off ? 0.15 : 0.55),
+          ),
+        ),
+      ),
+    );
+  }
 }

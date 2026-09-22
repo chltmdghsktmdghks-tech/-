@@ -706,6 +706,19 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       ? TapSnap.sixteenth
       : TapSnap.eighth;
 
+  /// **꾹 눌러 굴리는 것이 이 악기에 뜻이 있는가** (사용자 지적, 2026-09-22:
+  /// "킥에서 누르고있으면 연타하는 기능이 왜 필요하니").
+  ///
+  /// 맞는 말이다. 악기마다 손이 하는 일이 다르다:
+  ///  · **킥** — 굴릴 일이 거의 없다. 킥은 *몇 번*이 아니라 **어디**가 전부다.
+  ///    16분 연타는 메탈의 더블 페달이지 이 앱이 만드는 음악이 아니다.
+  ///  · **스네어** — 필인이 곧 롤이다. 마지막 반 마디를 굴리는 것이 기본기다.
+  ///  · **하이햇** — 16비트 자체가 굴리는 것이다. 격자도 여기만 16분이다.
+  ///
+  /// 그래서 킥에서는 꾹 눌러도 **한 방**이다. 안내 문구도 그에 맞춰 갈린다.
+  bool get _canRoll =>
+      _stageDef.kind == DoodleKind.drum && _stageDef.drumLane != 'kick';
+
   /// 손짓으로 정해진 것들을 **음 줄에 한꺼번에 얹는다.**
   ///
   /// `tapToNotes` 는 박자만 담는 함수라 세기를 늘 2로 적고 높이도 그 칸의
@@ -863,9 +876,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         widget.host?.drumOn(_drumTrack.kit, _stageDef.drumLane!, vel);
         // 타악은 길이가 없다 — 그 자리에 한 칸.
         if (recording) rec?.up(pad, pos);
-        // 붙이고 있으면 **롤**이 돈다. 여기서는 시각만 잡아 두고, 실제 연타는
-        // `_tickRoll` 이 앞질러 예약한다(30ms 화면 시계로 내면 덜컹거린다).
-        f.rollNext = now.add(const Duration(milliseconds: _kRollAfterMs));
+        // 붙이고 있으면 **롤**이 돈다 — 단, `_canRoll` 인 악기만.
+        // 실제 연타는 `_tickRoll` 이 앞질러 예약한다(30ms 화면 시계로 내면
+        // 덜컹거린다). 여기서는 시작 시각만 잡아 둔다.
+        if (_canRoll) {
+          f.rollNext = now.add(const Duration(milliseconds: _kRollAfterMs));
+        }
       case DoodleKind.bass:
         f.freq = _bassFreq(step, tone);
         widget.host?.holdOn(_kHoldId + pad, _bassTrack.voice, f.freq, vel);
@@ -1621,9 +1637,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 이 단계에서 **실제로 듣는 손짓만** 적는다. 안 쓰는 것까지 적어 두면
   /// 해 봤는데 아무 일도 안 일어나서 "고장 난 화면"으로 보인다.
   String _hintText() => switch (_stageDef.kind) {
+    // **악기마다 다르게 적는다.** 못 하는 것을 적어 두면 해 보고 아무 일도
+    // 안 일어나서 고장으로 보인다(킥에는 롤이 없다 — `_canRoll`).
     DoodleKind.drum =>
-      '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
-          '꾹 누르면 잘게 굴러갑니다 · 두 손가락으로 번갈아 쳐도 됩니다',
+      _canRoll
+          ? '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
+                '꾹 누르면 잘게 굴러갑니다 · 두 손가락으로 번갈아 쳐도 됩니다'
+          : '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
+                '킥은 **어디에 놓는가**가 전부입니다 · 두 손가락으로 번갈아 쳐도 됩니다',
     DoodleKind.bass =>
       '위로 갈수록 높은 음 · 톡 치면 짧게, 잡으면 길게\n'
           '잡은 채 위아래로 끌면 미끄러집니다',
