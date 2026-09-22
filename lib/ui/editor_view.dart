@@ -278,7 +278,10 @@ class _EditorViewState extends State<EditorView> {
     if (DateTime.now().millisecondsSinceEpoch < _holdUntilMs) return;
     final p = _hs.position;
     final want = followTarget(
-      x: headStep(pos, steps: steps, loopBars: _loopBars) * _cell,
+      // **`spb` 를 꼭 넘긴다.** 안 넘기면 기본값 16으로 재는데, 그리는 쪽
+      // (아래 격자의 `headStep`)은 이 곡의 `spb` 로 잰다. 3/4·6/8 처럼 한 마디가
+      // 16칸이 아닌 곡에서는 둘이 달라져, **막대가 없는 자리로 화면이 끌려간다.**
+      x: headStep(pos, steps: steps, loopBars: _loopBars, spb: spb) * _cell,
       offset: _hs.offset,
       viewport: p.viewportDimension,
       maxScroll: p.maxScrollExtent,
@@ -982,7 +985,14 @@ class _EditorViewState extends State<EditorView> {
     final s = _sel;
     if (s == null) return;
     final next = NoteOps.move(_notes, s.degree, s.step, by, steps: steps);
-    if (next.every((n) => !(n[0] == s.degree && n[1] == s.step + by))) return;
+    // **성공 판정은 「내 음이 제자리를 떠났나」다.**
+    //
+    // 여태는 「목표 자리에 음이 있나」로 봤는데, `NoteOps.move` 는 그 자리에
+    // 이미 음이 있으면 아무것도 안 하고 원래 목록을 그대로 돌려준다. 그러면
+    // 거기 있던 **남의 음**을 보고 성공으로 읽었다 — 판은 그대로인데 노란
+    // 테두리만 옆 음으로 넘어가고, 그 뒤에 휴지통을 누르면 **남의 음이
+    // 지워졌다.** 고른 걸 지웠다고 생각하는데 엉뚱한 게 사라진다.
+    if (next.any((n) => n[0] == s.degree && n[1] == s.step)) return;
     _snapshot();
     _sel = s.movedTo(s.step + by);
     _writeNotes(next);
@@ -2341,6 +2351,15 @@ class _SelBar extends StatelessWidget {
     final s = sel;
     // 아무것도 안 골랐을 때는 안내 **한 줄**뿐이다 — 86dp 를 차지할 이유가 없다.
     // 가로 화면에서 그 86dp 가 격자 두 줄이다(그림으로 뽑아 보고 잡았다).
+    //
+    // ── 알려진 문제 (2026-09-22, 아직 안 고침) ──
+    // 이 높이가 바뀌면 **격자도 44px 줄어든다**(실측 528 → 484). 15줄이면 줄
+    // 높이가 35.2 → 32.3 으로 바뀌어, 음 하나를 고르는 순간 아래쪽 줄이 한 줄
+    // 가까이 밀린다 — 다음 손가락이 다른 줄에 떨어진다.
+    // 86dp 로 **고정해 봤더니 더 나빴다**: 격자가 448px 이 되어 15줄(최소 줄
+    // 높이 32 × 15 = 480px)이 안 들어가고 **맨 아랫줄이 화면 밖**으로 나갔다.
+    // 제대로 고치려면 아래 바를 격자 **위에 띄워야** 한다(레이아웃 자리를 안
+    // 뺏게) — 설계 변경이라 따로 다룬다.
     final empty = s == null || (!isDrum && note == null);
     return Container(
       height: empty ? 42 : 86,
