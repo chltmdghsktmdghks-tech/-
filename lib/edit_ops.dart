@@ -104,6 +104,32 @@ class NoteOps {
     return out;
   }
 
+  /// 같은 도수에서 [step] **다음 음이 시작하는 칸**. 없으면 판 끝([steps]).
+  static int _nextStart(
+    List<List<Object?>> list,
+    int degree,
+    int step,
+    int steps,
+  ) {
+    var limit = steps;
+    for (final n in list) {
+      if (n[0] != degree) continue;
+      final s = n[1] as int;
+      if (s > step && s < limit) limit = s;
+    }
+    return limit;
+  }
+
+  /// 길이 바꾸기 — **뒷 음을 덮지 않는다.**
+  ///
+  /// 덮으면 그 음이 화면에서 가려지고, 편집기의 손끝 판정은 위에 그려진 음을
+  /// 잡으므로 **덮인 음은 손으로 만질 수 없게 된다**(지울 수도 고를 수도 없다).
+  /// 소리로는 계속 나는데 화면에서는 사라진 것처럼 보인다.
+  ///
+  /// 다만 **이미 겹쳐 있는 것을 줄이지는 않는다**: 「끌면 쫘르륵 깔린다」가
+  /// 일부러 이웃끼리 1칸씩 겹쳐 놓기 때문이다(`editor_ui_test.dart` 10번).
+  /// 무턱대고 자르면 그렇게 깐 줄의 음을 만지는 순간 전부 1칸으로 쪼그라든다.
+  /// 그래서 **늘리는 쪽만** 막는다.
   static List<List<Object?>> setLen(
     List<List<Object?>> list,
     int degree,
@@ -113,7 +139,14 @@ class NoteOps {
   }) {
     final out = _copy(list);
     final at = _indexOf(out, degree, step);
-    if (at >= 0) out[at][2] = _fitLen(len, step, steps);
+    if (at < 0) return out;
+    final cur = out[at][2] as int;
+    final room = (_nextStart(out, degree, step, steps) - step).clamp(
+      1,
+      kMaxNoteLen,
+    );
+    final cap = room > cur ? room : cur; // 이미 겹친 것은 그대로 둔다
+    out[at][2] = _fitLen(len, step, steps).clamp(1, cap);
     return out;
   }
 

@@ -1202,15 +1202,28 @@ class _EditorViewState extends State<EditorView> {
     if (now == null) return;
     final len = (d.len0 + (dx / _cell).round()).clamp(1, kMaxNoteLen);
     if (len != (now[2] as int)) {
-      _writeNotes(
-        NoteOps.setLen(
-          _notes,
-          d.curDegree ?? d.degree,
-          d.step,
-          len,
-          steps: steps,
-        ),
+      final next = NoteOps.setLen(
+        _notes,
+        d.curDegree ?? d.degree,
+        d.step,
+        len,
+        steps: steps,
       );
+      // **막혔으면 손끝으로 알려 준다.** 뒷 음에 막혀 더 못 늘어나는데 화면도
+      // 손도 아무 말이 없으면, 사용자는 잡은 것을 **놓친 줄 안다** — 손을 떼고
+      // 다시 잡는다. 한 번만 울리게 깃발을 둔다(끄는 내내 드르륵 울리면 그게
+      // 더 고장처럼 느껴진다).
+      final deg = d.curDegree ?? d.degree;
+      final got = next.firstWhere(
+        (n) => n[0] == deg && n[1] == d.step,
+        orElse: () => const <Object?>[],
+      );
+      final blocked = got.isNotEmpty && (got[2] as int) != len;
+      if (blocked != d.blocked) {
+        d.blocked = blocked;
+        if (blocked) HapticFeedback.heavyImpact();
+      }
+      _writeNotes(next);
     }
   }
 
@@ -1847,6 +1860,10 @@ class _Drag {
   /// 세로로 옮긴 결과 **지금 어디에 있나.** 다음 계산의 기준은 늘 시작 자리라,
   /// 이건 「거기 이미 뭐가 있나」를 볼 때와 옮길 음을 찾을 때만 쓴다.
   int? curDegree;
+
+  /// 지금 **막혀 있나**(더 못 늘어나거나 못 옮기는 상태). 상태가 바뀔 때만
+  /// 한 번 울리려고 들고 있는다 — 매 프레임 울리면 드르륵거려 더 나쁘다.
+  bool blocked = false;
   String? curLane;
 
   _Drag({
