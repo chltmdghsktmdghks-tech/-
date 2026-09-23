@@ -334,6 +334,12 @@ class _SceneViewState extends State<SceneView> {
   }
 
   void _stop() {
+    // 연주 녹음(_arr) 중에 정지를 누르면, 여태 반주만 끄고 녹음 상태는 살려
+    // 둬서 「곡으로 (N)」 빨간 칩과 _arrClock 이 계속 남았다 — 다음에 ▶ 를
+    // 누르면 멈춰 있던 시간까지 경과에 섞여 구간 길이가 어긋났다. 정지 때
+    // 녹음 중이면 먼저 곡으로 갈무리한다(_toggleArrange 종료 분기가 지금까지
+    // 넘긴 씬을 구간으로 만들고 되돌리기까지 준다 — 버리지 않는다).
+    if (_arr != null) _toggleArrange();
     widget.host?.allOff();
     widget.host?.setSongMode(false);
     _debounce?.cancel();
@@ -369,6 +375,7 @@ class _SceneViewState extends State<SceneView> {
           host: widget.host,
           bars: _bars,
           loopSec: _loopSec,
+          clicksPerBar: widget.project.meterDef.clicksPerBar,
           onBars: _setSceneBars,
         ),
         Expanded(
@@ -977,12 +984,16 @@ class _PlayHead extends StatelessWidget {
   final int bars;
   final double loopSec;
 
+  /// 한 마디의 박 수(박자표). 4/4=4, 3/4=3, 6/8=6 … 재생 막대 박 번호에 쓴다.
+  final int clicksPerBar;
+
   /// 씬 한 판을 몇 마디로 할지 바꾼다. 돌고 있을 때는 null(막대가 그 자리를 쓴다).
   final void Function(int bars)? onBars;
   const _PlayHead({
     required this.host,
     required this.bars,
     required this.loopSec,
+    required this.clicksPerBar,
     this.onBars,
   });
 
@@ -1000,7 +1011,10 @@ class _PlayHead extends StatelessWidget {
         loopSec: loopSec,
         builder: (context, pos, looping) {
           final bar = (pos * n).floor().clamp(0, n - 1);
-          final beat = ((pos * n * 4).floor() % 4) + 1;
+          // 박자표를 따른다 — 여태 4로 박아 4/4 고정이라 왈츠(3/4)·6/8 에서
+          // 틀린 박 번호를 보여 줬다(편집기는 커밋 34df84d 에서 같은 것을 고쳤다).
+          final cpb = clicksPerBar;
+          final beat = ((pos * n * cpb).floor() % cpb) + 1;
           return Padding(
             padding: const EdgeInsets.fromLTRB(10, 5, 10, 5),
             child: Row(
@@ -1293,7 +1307,10 @@ class _TrackRow extends StatelessWidget {
                   onPressed: () => _confirmRest(context),
                   tooltip: '이 트랙 쉬기',
                   iconSize: 18,
-                  color: track.pattern == null ? c : Colors.white24,
+                  // 색이 거꾸로였다 — 이미 쉬는 중(pattern==null)이면 눌러도
+                  // 아무 일도 안 하는데 강조색이었고, 실제로 뺄 게 있을 때
+                  // 흐렸다. 눌러서 되는 상태를 또렷하게, 무동작을 흐리게.
+                  color: track.pattern == null ? Colors.white24 : c,
                   icon: const Icon(Icons.do_not_disturb_on_outlined),
                 ),
               ],
