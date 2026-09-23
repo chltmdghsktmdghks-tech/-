@@ -16,6 +16,7 @@ import '../project.dart';
 import '../store.dart';
 import '../ask_song.dart';
 import 'ask_sheet.dart';
+import 'design.dart';
 import 'doodle_play_view.dart';
 import 'settings_sheet.dart';
 import 'workspace_view.dart';
@@ -977,12 +978,15 @@ class _ProjectCard extends StatelessWidget {
 }
 
 /// 악기별 색 — 씬 화면의 악기 줄 색(드럼 초록·베이스 파랑·코드 보라·멜로디
-/// 호박)과 맞춘다. `kPreviewTrackTypes` 의 차례와 같다.
+/// 호박)과 맞춘다. `kPreviewTrackTypes` 의 차례와 같다. (예전엔 iOS 계열
+/// hex를 따로 썼는데, song_view·scene_view·mixer_view·show_view 가 이미 쓰는
+/// Material 계열 `DS.track*` 로 맞췄다 — 같은 악기가 화면마다 다른 색이면
+/// 같은 것인 줄 모른다.)
 const List<Color> _kInstColor = [
-  Color(0xFF34C759), // 드럼
-  Color(0xFF0A84FF), // 베이스
-  Color(0xFFBF5AF2), // 코드
-  Color(0xFFFF9F0A), // 멜로디
+  DS.trackDrum, // 드럼
+  DS.trackBass, // 베이스
+  DS.trackChord, // 코드
+  DS.trackMelody, // 멜로디
 ];
 
 /// 악기 아이콘 — 색만으론 뭔지 외워야 해서(사용자 요청, 2026-09-15: "악기는
