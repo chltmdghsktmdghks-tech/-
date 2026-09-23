@@ -1156,7 +1156,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         dy.abs() >= _kSwipeSlop &&
         dy.abs() > dx.abs() * _kSwipeRatio) {
       f.swiped = true;
-      widget.host?.holdOff(_kHoldId + f.pad);
+      // **코드 화음을 끈다** — 옛날엔 `_kHoldId + f.pad`(베이스용 번호)를 껐는데,
+      // 코드 단계에서 실제로 울리는 소리는 `_chordDown` 이 `_kChordId + i` 로 켠
+      // 화음 음들이다. 켠 적도 없는 번호를 꺼 봐야 아무 일도 안 일어나, 쓸어도
+      // 옛 화음이 계속 울리고 `_octShift` 만 바뀌어 옥타브가 귀에 반영되지 않았다
+      // (검수에서 잡음). 이 분기는 코드 단계 전용이라(_hasTone 이면 위에서 이미
+      // 사다리로 빠진다) 화음 번호를 다 놓는 게 맞다.
+      for (var i = 0; i < _kMaxChordTones; i++) {
+        widget.host?.holdOff(_kChordId + i);
+      }
       _rec?.cancel(f.pad);
       HapticFeedback.selectionClick();
       setState(() {
