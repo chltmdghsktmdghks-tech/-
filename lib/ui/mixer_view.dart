@@ -1815,21 +1815,31 @@ class _LiveStrip extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  // 옆의 '이펙트'는 시트를 여는데 이 버튼은 믹서 화면을 닫고
+                  // 건반으로 **나간다**. 같은 모양이면 헷갈리므로 채운 버튼이
+                  // 아니라 테두리만 있는 회색 버튼 + 나가기 화살표로 구분한다.
                   Expanded(
-                    child: FilledButton(
+                    child: OutlinedButton(
                       onPressed: () => Navigator.pop(context),
-                      style: FilledButton.styleFrom(
+                      style: OutlinedButton.styleFrom(
                         padding: EdgeInsets.zero,
-                        backgroundColor: _kLiveColor.withValues(alpha: 0.22),
-                        foregroundColor: _kLiveColor,
+                        foregroundColor: Colors.white70,
+                        side: const BorderSide(color: Colors.white24),
                       ),
                       child: const FittedBox(
-                        child: Text(
-                          '건반',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.arrow_back, size: 13),
+                            SizedBox(width: 3),
+                            Text(
+                              '건반',
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),

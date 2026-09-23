@@ -892,6 +892,12 @@ Color _sceneColor(int i) => _sceneColors[i.abs() % _sceneColors.length];
 ///
 /// **고르기 전에는 안 나온다.** 늘 띄우면 구간을 안 고른 사람에게도 자리만 먹는다.
 class _BlockBar extends StatelessWidget {
+  /// 이 줄이 늘 차지하는 높이 — 위 타임라인이 이만큼을 **미리 비워 둬서**
+  /// 구간을 고를 때마다 줄이 나타났다 사라지며 스크롤 영역이 출렁이지 않게 한다.
+  /// (윗변 1 + 세로 패딩 2+2 + `_SmallBtn` 44 = 49. `_SmallBtn` 은 글자 배율과
+  /// 무관하게 고정이라 이 값도 안 흔들린다.)
+  static const double height = 49;
+
   final int index;
   final Section section;
   final Arrangement song;
@@ -1317,19 +1323,25 @@ class _Timeline extends StatelessWidget {
             ),
           ),
         ),
-        // 고른 구간의 손잡이 — **고르기 전에는 안 나온다**(늘 띄우면 자리만 먹는다)
-        if (selOk)
-          _BlockBar(
-            index: sel,
-            section: song.sections[sel],
-            song: song,
-            onChanged: onChanged,
-            onPlay: () => onPlayFrom(sel),
-            onEdit: onEditScene == null
-                ? null
-                : () => onEditScene!(song.sections[sel].scene),
-            onDone: () => onSelect(-1),
-          ),
+        // 고른 구간의 손잡이 — **자리는 늘 차지한다.** 예전엔 고를 때만 나타나서,
+        // 고를 때마다 위 타임라인 스크롤 영역이 49px 씩 출렁였다(레이아웃 점프).
+        // 선택이 없을 땐 같은 높이의 빈 자리로 예약해 스크롤 영역을 고정한다.
+        SizedBox(
+          height: _BlockBar.height,
+          child: selOk
+              ? _BlockBar(
+                  index: sel,
+                  section: song.sections[sel],
+                  song: song,
+                  onChanged: onChanged,
+                  onPlay: () => onPlayFrom(sel),
+                  onEdit: onEditScene == null
+                      ? null
+                      : () => onEditScene!(song.sections[sel].scene),
+                  onDone: () => onSelect(-1),
+                )
+              : null,
+        ),
       ],
     );
   }
@@ -1516,6 +1528,14 @@ class _Timeline extends StatelessWidget {
 
 /// 마디 하나의 폭(px) — 타임라인이 자리를 잡는 자. 시험도 같은 값을 써야 한다.
 const double kTimelineBarW = 30.0;
+
+/// 순서 손잡이(왼쪽)와 길이 손잡이(오른쪽)의 **히트영역 폭.**
+///
+/// 둘 다 16px 고정이면 제일 좁은 구간(1마디 = 27px 카드)에서 16+16 = 32 로
+/// 카드보다 넓어져 가운데에서 히트영역이 포개진다 — 순서를 바꾸려다 길이가
+/// 늘거나 그 반대가 된다. **카드 치수는 그대로 두고 손잡이 폭만** 좁은 구간에서
+/// 반씩 나눠 갖게 해 가운데 최소 4px 틈을 남긴다(넓은 구간에서는 16px 그대로).
+double _gripHitW(double blkW) => ((blkW - 4) / 2).clamp(10.0, 16.0);
 
 /// 지금 몇 초인가 → 타임라인에서 **몇 px 자리**인가. 곡 밖이면 −1.
 ///
@@ -1966,7 +1986,7 @@ class _SceneLaneState extends State<_SceneLane> {
                           left: 0,
                           top: 0,
                           bottom: 0,
-                          width: 16,
+                          width: _gripHitW(bars[i].$2 * barW - 3),
                           child: _ClaimDrag(
                             key: ValueKey('secreorder-$i'),
                             onStart: () => _dragStart(i),
@@ -1991,7 +2011,7 @@ class _SceneLaneState extends State<_SceneLane> {
                         right: 0,
                         top: 0,
                         bottom: 0,
-                        width: 16,
+                        width: _gripHitW(bars[i].$2 * barW - 3),
                         child: _ClaimDrag(
                           key: ValueKey('secresize-$i'),
                           onStart: () => _resizeStart(i),

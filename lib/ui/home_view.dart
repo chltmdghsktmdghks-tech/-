@@ -109,6 +109,12 @@ class _HomeViewState extends State<HomeView> {
   /// 첫 실행 안내를 이번 실행에서 이미 띄웠는가(같은 화면이 다시 그려져도 두 번 안 뜬다).
   bool _guideShown = false;
 
+  /// **진입 동작 연타 방지** — 프로젝트 열기·질문 답해 만들기·두드려 만들기·
+  /// 새 프로젝트는 모두 모달을 열거나 새 곡을 만드는 무거운 동작이라, 손끝이
+  /// 빠르게 두 번 닿으면 모달이 겹쳐 뜨거나 곡이 둘 만들어졌다. 하나가 진행
+  /// 중이면 나머지 진입 탭은 무시한다(첫 탭은 그대로 정상 반응).
+  bool _busy = false;
+
   /// null = 전체. 아니면 그 장르만.
   String? _filterGenre;
 
@@ -158,9 +164,15 @@ class _HomeViewState extends State<HomeView> {
   }
 
   Future<void> _openSong(String id) async {
-    await store?.open(id);
-    if (!mounted) return;
-    _openWorkspace(context);
+    if (_busy) return;
+    _busy = true;
+    try {
+      await store?.open(id);
+      if (!mounted) return;
+      _openWorkspace(context);
+    } finally {
+      _busy = false;
+    }
   }
 
   /// 새 프로젝트를 만들기 **전에** 이름을 지어 볼지 묻는다(사용자 요청,
@@ -169,11 +181,17 @@ class _HomeViewState extends State<HomeView> {
   /// 자동 이름으로 바로 만든다. 대화상자를 닫아 버리면(바깥 탭·뒤로가기)
   /// 아예 만들지 않는다 — 아직 "만들겠다"고도 안 한 참이라 취소가 맞다.
   Future<void> _newProject() async {
-    final typed = await _askNewProjectName(context);
-    if (typed == null) return;
-    await store?.newSong(name: typed.trim().isEmpty ? null : typed.trim());
-    if (!mounted) return;
-    _openWorkspace(context);
+    if (_busy) return;
+    _busy = true;
+    try {
+      final typed = await _askNewProjectName(context);
+      if (typed == null) return;
+      await store?.newSong(name: typed.trim().isEmpty ? null : typed.trim());
+      if (!mounted) return;
+      _openWorkspace(context);
+    } finally {
+      _busy = false;
+    }
   }
 
   Future<String?> _askNewProjectName(BuildContext context) async {
@@ -211,7 +229,10 @@ class _HomeViewState extends State<HomeView> {
   /// 음악 용어를 하나도 안 쓰고 열 가지만 묻는다. 0에서 만들지 않고 **검증된
   /// 완성곡을 뼈대로 삼아 변형**하므로 이상한 결과가 안 나온다(`ask_song.dart`).
   Future<void> _askSong() async {
-    await showAskSheet(
+    if (_busy) return;
+    _busy = true;
+    try {
+      await showAskSheet(
       context,
       onDone: (ans) async {
         final r = askRecipe(ans, pick: DateTime.now().second);
@@ -237,7 +258,10 @@ class _HomeViewState extends State<HomeView> {
           );
         _openWorkspace(context);
       },
-    );
+      );
+    } finally {
+      _busy = false;
+    }
   }
 
   /// **두드려서 만들기(Doodle Play)** — 사용자 지시서, 2026-09-17.
@@ -247,10 +271,13 @@ class _HomeViewState extends State<HomeView> {
   /// 비워 둔 채로 `DoodlePlayView`를 연다 — 거기서 킥·스네어·하이햇을
   /// 사용자가 직접 쳐서 쌓는다.
   Future<void> _doodlePlay() async {
-    final genre = await _pickGenreForDoodle();
-    if (genre == null || !mounted) return;
-    await store?.newSong();
-    project.setGenre(genre);
+    if (_busy) return;
+    _busy = true;
+    try {
+      final genre = await _pickGenreForDoodle();
+      if (genre == null || !mounted) return;
+      await store?.newSong();
+      project.setGenre(genre);
     // `setGenre` 는 `Project` 안의 장르 이름만 바꾼다 — 실제 재생 빠르기·조는
     // `Transport`(딴 객체)에 있어서 따로 옮겨야 한다("질문에 답해서 곡
     // 만들기"의 `applyAsk`도 같은 이유로 이렇게 한다). 안 옮기면 이전 곡의
@@ -265,6 +292,9 @@ class _HomeViewState extends State<HomeView> {
     await store?.saveNow();
     if (!mounted) return;
     _openWorkspace(context);
+    } finally {
+      _busy = false;
+    }
   }
 
   Future<String?> _pickGenreForDoodle() {
