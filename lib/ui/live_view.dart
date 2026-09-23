@@ -924,49 +924,51 @@ class _VoiceSheetBodyState extends State<_VoiceSheetBody> {
                                 runSpacing: 6,
                                 children: [
                                   for (final v in e.value)
-                                    GestureDetector(
-                                      onTap: () {
-                                        // 소리를 못 내면 예전처럼 한 번에 고른다
-                                        if (onPreview == null) {
-                                          Navigator.pop(ctx, v);
-                                          return;
-                                        }
-                                        // 겨눠 둔 것을 다시 누르면 그때 바뀐다
-                                        if (armed == v) {
-                                          Navigator.pop(ctx, v);
-                                          return;
-                                        }
-                                        onPreview(v);
-                                        setSt(() => armed = v);
-                                      },
-                                      child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 11,
-                                          vertical: 9,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: armed == v
-                                              ? Colors.amber.shade400
-                                              : (v == current
-                                                    ? Colors.tealAccent.shade400
-                                                    : Colors.white10),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
+                                    // 리플만 — 색·모서리를 Material 로 올려
+                                    // 잉크가 칩 위에서 번지게 하고, padding 은
+                                    // 예전 그대로 둔다(치수 불변).
+                                    Material(
+                                      color: armed == v
+                                          ? Colors.amber.shade400
+                                          : (v == current
+                                                ? Colors.tealAccent.shade400
+                                                : Colors.white10),
+                                      borderRadius: BorderRadius.circular(8),
+                                      clipBehavior: Clip.antiAlias,
+                                      child: InkWell(
+                                        onTap: () {
+                                          // 소리를 못 내면 예전처럼 한 번에 고른다
+                                          if (onPreview == null) {
+                                            Navigator.pop(ctx, v);
+                                            return;
+                                          }
+                                          // 겨눠 둔 것을 다시 누르면 그때 바뀐다
+                                          if (armed == v) {
+                                            Navigator.pop(ctx, v);
+                                            return;
+                                          }
+                                          onPreview(v);
+                                          setSt(() => armed = v);
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 11,
+                                            vertical: 9,
                                           ),
-                                        ),
-                                        child: Text(
-                                          armed == v
-                                              ? '${VOICE_LABEL[v] ?? v} · 다시 탭'
-                                              : (VOICE_LABEL[v] ?? v),
-                                          style: TextStyle(
-                                            fontSize: 12.5,
-                                            fontWeight:
-                                                (v == current || armed == v)
-                                                ? FontWeight.w800
-                                                : FontWeight.w400,
-                                            color: (v == current || armed == v)
-                                                ? Colors.black
-                                                : Colors.white70,
+                                          child: Text(
+                                            armed == v
+                                                ? '${VOICE_LABEL[v] ?? v} · 다시 탭'
+                                                : (VOICE_LABEL[v] ?? v),
+                                            style: TextStyle(
+                                              fontSize: 12.5,
+                                              fontWeight:
+                                                  (v == current || armed == v)
+                                                  ? FontWeight.w800
+                                                  : FontWeight.w400,
+                                              color: (v == current || armed == v)
+                                                  ? Colors.black
+                                                  : Colors.white70,
+                                            ),
                                           ),
                                         ),
                                       ),
@@ -1676,23 +1678,29 @@ class _Chip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 40, // 32 는 손가락에 비해 작다 — 라이브는 연주 중에 누른다
-        margin: const EdgeInsets.only(right: 6),
-        padding: const EdgeInsets.symmetric(horizontal: 11),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: on ? Colors.tealAccent.shade400 : Colors.white12,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            fontWeight: FontWeight.w800,
-            color: on ? Colors.black87 : Colors.white70,
+    // 리플은 시각 오버레이 — 치수는 그대로 두고 눌린 반응만 준다.
+    // 색·모서리를 Material 로 올려 잉크가 칩 위에서 번지게 하고(색이 Container
+    // 에 있으면 잉크가 가려진다), height/margin/padding 은 예전 그대로 둔다.
+    return Container(
+      height: 40, // 32 는 손가락에 비해 작다 — 라이브는 연주 중에 누른다
+      margin: const EdgeInsets.only(right: 6),
+      child: Material(
+        color: on ? Colors.tealAccent.shade400 : Colors.white12,
+        borderRadius: BorderRadius.circular(8),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 11),
+            alignment: Alignment.center,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+                color: on ? Colors.black87 : Colors.white70,
+              ),
+            ),
           ),
         ),
       ),

@@ -561,10 +561,7 @@ class _Transport extends StatelessWidget {
                       children: [
                         const Text(
                           '빠르기',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.white38,
-                          ),
+                          style: TextStyle(fontSize: 11, color: Colors.white38),
                         ),
                         const SizedBox(width: 6),
                         Text(
@@ -670,37 +667,42 @@ class _SceneBar extends StatelessWidget {
           children: [
             // **연주해서 곡 만들기.** 켜고 씬을 넘기면 그 순서가 구간표가 된다.
             // 씬 줄 바로 옆이라야 뜻이 통한다 — 여기서 하는 일이 곧 그것이다.
-            GestureDetector(
-              onTap: onRecord,
-              child: Container(
-                height: 34, // 손가락 바닥선
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                margin: const EdgeInsets.only(right: 8),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: recording
-                      ? Colors.red.shade600
-                      : Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      recording ? Icons.stop : Icons.fiber_manual_record,
-                      size: 13,
-                      color: recording ? Colors.white : Colors.red.shade300,
+            // 리플이 칩 색 위로 보이게 색·둥근모서리를 Material 로 올린다
+            // (Container 채움 뒤에 리플을 그리면 가려진다). 치수는 그대로.
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: Material(
+                color: recording
+                    ? Colors.red.shade600
+                    : Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+                clipBehavior: Clip.antiAlias,
+                child: InkWell(
+                  onTap: onRecord,
+                  child: Container(
+                    height: 34, // 손가락 바닥선
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    alignment: Alignment.center,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          recording ? Icons.stop : Icons.fiber_manual_record,
+                          size: 13,
+                          color: recording ? Colors.white : Colors.red.shade300,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          recording ? '곡으로 ($recCount)' : '연주 녹음',
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            color: recording ? Colors.white : Colors.white54,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 4),
-                    Text(
-                      recording ? '곡으로 ($recCount)' : '연주 녹음',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: recording ? Colors.white : Colors.white54,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -711,97 +713,108 @@ class _SceneBar extends StatelessWidget {
                   for (var i = 0; i < project.scenes.length; i++)
                     Padding(
                       padding: const EdgeInsets.only(right: 5),
-                      child: GestureDetector(
-                        onTap: () => onLaunch(i),
-                        onLongPress: () => _edit(context, i),
-                        child: Container(
-                          alignment: Alignment.center,
-                          padding: EdgeInsets.only(
-                            left: 12,
-                            right: i == project.currentScene ? 7 : 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: i == project.currentScene
-                                ? Colors.indigo.shade400
-                                : Colors.white10,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          // 이름 바꾸기·복제·삭제가 **길게 누르기에만** 있었다.
-                          // 곡 목록에서 이미 겪은 것과 같은 문제다 —
-                          // 「있는 줄도 모르니 씬 이름이 전부 "씬 2" 로 남는다」.
-                          // 지금 씬에만 ⋮ 를 붙인다: 하나만 나오니 안 어지럽고,
-                          // **어느 씬에 대한 메뉴인지**도 그 자리에서 보인다.
-                          // 길게 누르기는 그대로 둔다(이미 익힌 사람이 있다).
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // **지금 씬만 춤춘다.** 다 움직이면 어느 것이
-                              // 소리 나는지 오히려 안 보이고, 씬 수만큼 시계가
-                              // 돈다(멈춘 것은 그릴 값이 안 바뀐다).
-                              if ((project.scenes[i].critter ?? '').isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 5),
-                                  child: i == project.currentScene
-                                      ? CritterBeat(
-                                          host: host,
-                                          loopSec: loopSec,
-                                          bpm: bpm,
-                                          value: project.scenes[i].critter!,
-                                          size: 26,
-                                          color: Colors.white,
-                                        )
-                                      : CritterIcon(
-                                          value: project.scenes[i].critter!,
-                                          size: 26,
-                                          color: Colors.white54,
-                                        ),
-                                ),
-                              Text(
-                                project.scenes[i].name,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: i == project.currentScene
-                                      ? FontWeight.w800
-                                      : FontWeight.w400,
-                                  color: i == project.currentScene
-                                      ? Colors.white
-                                      : Colors.white60,
-                                ),
-                              ),
-                              if (i == project.currentScene)
-                                GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: () => _edit(context, i),
-                                  // **18×15 였다.** 보이는 점 셋은 그대로 두고
-                                  // 눌리는 자리만 칩 높이만큼 넓힌다 — 이만한 것을
-                                  // 두 번 세 번 눌러야 하면 있으나 마나다.
-                                  child: const SizedBox(
-                                    width: 34,
-                                    height: double.infinity,
-                                    child: Icon(
-                                      Icons.more_vert,
-                                      size: 15,
-                                      color: Colors.white70,
-                                    ),
+                      // 칩 색·둥근모서리를 Material 로 올려 리플이 그 위에
+                      // 보이게 한다(Container 채움 뒤에 그리면 가려진다). 치수 그대로.
+                      child: Material(
+                        color: i == project.currentScene
+                            ? Colors.indigo.shade400
+                            : Colors.white10,
+                        borderRadius: BorderRadius.circular(8),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => onLaunch(i),
+                          onLongPress: () => _edit(context, i),
+                          child: Container(
+                            alignment: Alignment.center,
+                            padding: EdgeInsets.only(
+                              left: 12,
+                              right: i == project.currentScene ? 7 : 12,
+                            ),
+                            // 이름 바꾸기·복제·삭제가 **길게 누르기에만** 있었다.
+                            // 곡 목록에서 이미 겪은 것과 같은 문제다 —
+                            // 「있는 줄도 모르니 씬 이름이 전부 "씬 2" 로 남는다」.
+                            // 지금 씬에만 ⋮ 를 붙인다: 하나만 나오니 안 어지럽고,
+                            // **어느 씬에 대한 메뉴인지**도 그 자리에서 보인다.
+                            // 길게 누르기는 그대로 둔다(이미 익힌 사람이 있다).
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // **지금 씬만 춤춘다.** 다 움직이면 어느 것이
+                                // 소리 나는지 오히려 안 보이고, 씬 수만큼 시계가
+                                // 돈다(멈춘 것은 그릴 값이 안 바뀐다).
+                                if ((project.scenes[i].critter ?? '')
+                                    .isNotEmpty)
+                                  Padding(
+                                    padding: const EdgeInsets.only(right: 5),
+                                    child: i == project.currentScene
+                                        ? CritterBeat(
+                                            host: host,
+                                            loopSec: loopSec,
+                                            bpm: bpm,
+                                            value: project.scenes[i].critter!,
+                                            size: 26,
+                                            color: Colors.white,
+                                          )
+                                        : CritterIcon(
+                                            value: project.scenes[i].critter!,
+                                            size: 26,
+                                            color: Colors.white54,
+                                          ),
+                                  ),
+                                Text(
+                                  project.scenes[i].name,
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: i == project.currentScene
+                                        ? FontWeight.w800
+                                        : FontWeight.w400,
+                                    color: i == project.currentScene
+                                        ? Colors.white
+                                        : Colors.white60,
                                   ),
                                 ),
-                            ],
+                                if (i == project.currentScene)
+                                  InkResponse(
+                                    onTap: () => _edit(context, i),
+                                    radius: 22,
+                                    // **18×15 였다.** 보이는 점 셋은 그대로 두고
+                                    // 눌리는 자리만 칩 높이만큼 넓힌다 — 이만한 것을
+                                    // 두 번 세 번 눌러야 하면 있으나 마나다.
+                                    child: const SizedBox(
+                                      width: 34,
+                                      height: double.infinity,
+                                      child: Icon(
+                                        Icons.more_vert,
+                                        size: 15,
+                                        color: Colors.white70,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  GestureDetector(
-                    onTap: project.addScene,
-                    child: Container(
-                      alignment: Alignment.center,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.white24),
-                      ),
-                      child: const Text(
-                        '＋',
-                        style: TextStyle(fontSize: 14, color: Colors.white54),
+                  // ＋ 새 씬 — 리플이 보이게 Material+InkWell. 테두리만 있는
+                  // 칩이라 채움이 리플을 가리지 않는다. 치수 그대로.
+                  Material(
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(8),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      onTap: project.addScene,
+                      child: Container(
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: const Text(
+                          '＋',
+                          style: TextStyle(fontSize: 14, color: Colors.white54),
+                        ),
                       ),
                     ),
                   ),
@@ -1926,9 +1939,7 @@ Future<String?> pickFromSheet(
                       ? Wrap(
                           spacing: 6,
                           runSpacing: 6,
-                          children: [
-                            for (final it in items) chip(ctx, it),
-                          ],
+                          children: [for (final it in items) chip(ctx, it)],
                         )
                       : Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1943,8 +1954,7 @@ Future<String?> pickFromSheet(
                                   child: Row(
                                     children: [
                                       Icon(
-                                        kVoiceFamilyIcon[e.key] ??
-                                            Icons.piano,
+                                        kVoiceFamilyIcon[e.key] ?? Icons.piano,
                                         size: 13,
                                         color: Colors.white54,
                                       ),

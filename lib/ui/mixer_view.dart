@@ -428,29 +428,35 @@ class _ViewChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
         height: 36, // 26 은 손가락에 비해 작다
-        padding: const EdgeInsets.symmetric(horizontal: 9),
         decoration: BoxDecoration(
           color: on ? Colors.teal.shade600 : Colors.white10,
           borderRadius: BorderRadius.circular(7),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 13, color: on ? Colors.white : Colors.white54),
-            const SizedBox(width: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w800,
-                color: on ? Colors.white : Colors.white54,
-              ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(7),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 9),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, size: 13, color: on ? Colors.white : Colors.white54),
+                const SizedBox(width: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    color: on ? Colors.white : Colors.white54,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -1382,20 +1388,26 @@ class _ToneChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
         decoration: BoxDecoration(
           color: on ? color : Colors.white10,
           borderRadius: BorderRadius.circular(8),
         ),
-        child: Text(
-          label,
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: on ? FontWeight.w800 : FontWeight.w500,
-            color: on ? Colors.black : Colors.white70,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: on ? FontWeight.w800 : FontWeight.w500,
+                color: on ? Colors.black : Colors.white70,
+              ),
+            ),
           ),
         ),
       ),
@@ -1532,33 +1544,39 @@ Future<void> _pickVoice(
                         runSpacing: 6,
                         children: [
                           for (final v in e.value)
-                            GestureDetector(
-                              onTap: () {
-                                live.voice = v;
-                                after();
-                                Navigator.pop(ctx);
-                              },
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 11,
-                                  vertical: 8,
-                                ),
+                            Material(
+                              color: Colors.transparent,
+                              child: Ink(
                                 decoration: BoxDecoration(
                                   color: v == live.voice
                                       ? _kLiveColor
                                       : Colors.white10,
                                   borderRadius: BorderRadius.circular(8),
                                 ),
-                                child: Text(
-                                  VOICE_LABEL[v] ?? v,
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: v == live.voice
-                                        ? FontWeight.w800
-                                        : FontWeight.w400,
-                                    color: v == live.voice
-                                        ? Colors.black
-                                        : Colors.white70,
+                                child: InkWell(
+                                  onTap: () {
+                                    live.voice = v;
+                                    after();
+                                    Navigator.pop(ctx);
+                                  },
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 11,
+                                      vertical: 8,
+                                    ),
+                                    child: Text(
+                                      VOICE_LABEL[v] ?? v,
+                                      style: TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: v == live.voice
+                                            ? FontWeight.w800
+                                            : FontWeight.w400,
+                                        color: v == live.voice
+                                            ? Colors.black
+                                            : Colors.white70,
+                                      ),
+                                    ),
                                   ),
                                 ),
                               ),
@@ -1686,39 +1704,45 @@ class _Strip extends StatelessWidget {
             // 넷을 욱여넣으면 하나도 제대로 못 잡는다(사용자 지적) → 시트에서 크게.
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: GestureDetector(
-                onTap: () => showChannelSheet(
-                  context,
-                  track: track,
-                  color: c,
-                  onChanged: onChanged,
-                  onSolo: onSolo,
-                  onRemove: onRemove,
-                  host: host,
-                ),
-                child: Container(
+              child: Material(
+                color: Colors.transparent,
+                child: Ink(
                   height: 40, // 34 는 손가락에 비해 작다
-                  alignment: Alignment.center,
+                  width: double.infinity,
                   decoration: BoxDecoration(
                     color: Colors.white10,
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  // 스트립 폭이 100dp 라 글자가 아슬아슬하다 — 넘치면 **작아지게** 한다
-                  child: const FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.tune, size: 14, color: Colors.white60),
-                        SizedBox(width: 4),
-                        Text(
-                          '좌우·울림·EQ',
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            color: Colors.white60,
-                          ),
+                  child: InkWell(
+                    onTap: () => showChannelSheet(
+                      context,
+                      track: track,
+                      color: c,
+                      onChanged: onChanged,
+                      onSolo: onSolo,
+                      onRemove: onRemove,
+                      host: host,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    // 스트립 폭이 100dp 라 글자가 아슬아슬하다 — 넘치면 **작아지게** 한다
+                    child: const Center(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.tune, size: 14, color: Colors.white60),
+                            SizedBox(width: 4),
+                            Text(
+                              '좌우·울림·EQ',
+                              style: TextStyle(
+                                fontSize: 10.5,
+                                color: Colors.white60,
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2233,21 +2257,27 @@ class _Toggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
         height: height,
-        alignment: Alignment.center,
+        width: double.infinity,
         decoration: BoxDecoration(
           color: on ? onColor : Colors.white10,
           borderRadius: BorderRadius.circular(7),
         ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w900,
-            color: on ? Colors.black : Colors.white54,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(7),
+          child: Center(
+            child: Text(
+              text,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w900,
+                color: on ? Colors.black : Colors.white54,
+              ),
+            ),
           ),
         ),
       ),
@@ -2609,28 +2639,33 @@ class _TrackRow extends StatelessWidget {
                             ),
                             const SizedBox(width: 5),
                             // 나머지 값(좌우·잔향·저음·고음)은 여기서 **크게** 만진다
-                            GestureDetector(
-                              onTap: () => showChannelSheet(
-                                context,
-                                track: track,
-                                color: c,
-                                onChanged: onChanged,
-                                onSolo: onSolo,
-                                onRemove: onRemove,
-                                host: host,
-                              ),
-                              child: Container(
+                            Material(
+                              color: Colors.transparent,
+                              child: Ink(
                                 width: 40,
                                 height: 40,
-                                alignment: Alignment.center,
                                 decoration: BoxDecoration(
                                   color: Colors.white10,
                                   borderRadius: BorderRadius.circular(7),
                                 ),
-                                child: const Icon(
-                                  Icons.tune,
-                                  size: 16,
-                                  color: Colors.white60,
+                                child: InkWell(
+                                  onTap: () => showChannelSheet(
+                                    context,
+                                    track: track,
+                                    color: c,
+                                    onChanged: onChanged,
+                                    onSolo: onSolo,
+                                    onRemove: onRemove,
+                                    host: host,
+                                  ),
+                                  borderRadius: BorderRadius.circular(7),
+                                  child: const Center(
+                                    child: Icon(
+                                      Icons.tune,
+                                      size: 16,
+                                      color: Colors.white60,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),

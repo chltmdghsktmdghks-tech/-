@@ -673,33 +673,43 @@ class _ModeBar extends StatelessWidget {
     Widget chip(String key, IconData icon, String label) {
       final on = mode == key;
       return Expanded(
-        child: GestureDetector(
-          onTap: () => onPick(key),
-          child: Container(
-            height: 38, // 손가락만 하게
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: on ? Colors.indigo.shade400 : Colors.white10,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(icon, size: 15, color: on ? Colors.white : Colors.white38),
-                const SizedBox(width: 5),
-                Flexible(
-                  child: Text(
-                    label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
+        // 리플: 눌리면 반응이 보이게(칩 배경이 불투명이라 Ink 로 칠하고 그 위에 스플래시).
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: () => onPick(key),
+            borderRadius: BorderRadius.circular(8),
+            child: Ink(
+              height: 38, // 손가락만 하게
+              decoration: BoxDecoration(
+                color: on ? Colors.indigo.shade400 : Colors.white10,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      icon,
+                      size: 15,
                       color: on ? Colors.white : Colors.white38,
                     ),
-                  ),
+                    const SizedBox(width: 5),
+                    Flexible(
+                      child: Text(
+                        label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w800,
+                          color: on ? Colors.white : Colors.white38,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
         ),
@@ -825,42 +835,48 @@ class _Bar extends StatelessWidget {
               ),
               const SizedBox(width: 6),
               // 반복 — 남에게 들려줄 때 곡이 끝나고 조용해지면 끝난 줄 모른다.
-              GestureDetector(
-                onTap: () => onLoop(!loop),
-                behavior: HitTestBehavior.opaque,
-                child: SizedBox(
-                  width: 40,
-                  height: 44,
-                  child: Icon(
-                    Icons.repeat,
-                    size: 19,
-                    color: loop ? Colors.teal.shade300 : Colors.white24,
+              Material(
+                type: MaterialType.transparency,
+                child: InkResponse(
+                  onTap: () => onLoop(!loop),
+                  radius: 24,
+                  child: SizedBox(
+                    width: 40,
+                    height: 44,
+                    child: Icon(
+                      Icons.repeat,
+                      size: 19,
+                      color: loop ? Colors.teal.shade300 : Colors.white24,
+                    ),
                   ),
                 ),
               ),
               // 내보내기 — 만드는 동안은 몇 %인지 보여 준다(멈춘 것처럼 보이면 안 된다).
-              GestureDetector(
-                onTap: exporting ? null : onExport,
-                behavior: HitTestBehavior.opaque,
-                child: SizedBox(
-                  width: 44,
-                  height: 44,
-                  child: exporting
-                      ? Center(
-                          child: Text(
-                            '${(exportPct * 100).round()}%',
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w800,
-                              color: Colors.white70,
+              Material(
+                type: MaterialType.transparency,
+                child: InkResponse(
+                  onTap: exporting ? null : onExport,
+                  radius: 26,
+                  child: SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: exporting
+                        ? Center(
+                            child: Text(
+                              '${(exportPct * 100).round()}%',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: Colors.white70,
+                              ),
                             ),
+                          )
+                        : const Icon(
+                            Icons.ios_share,
+                            size: 19,
+                            color: Colors.white54,
                           ),
-                        )
-                      : const Icon(
-                          Icons.ios_share,
-                          size: 19,
-                          color: Colors.white54,
-                        ),
+                  ),
                 ),
               ),
             ],
@@ -2747,24 +2763,29 @@ class _SmallBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     // 보이는 네모는 30×30 그대로 두고 **눌리는 자리만** 38×44 로 넓힌다.
     // 네모를 키우면 줄이 복잡해 보이는데, 여백은 어차피 비어 있다.
-    // (`opaque` 가 없으면 여백은 안 눌린다 — 자식이 없는 자리라서.)
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
-        child: Container(
-          width: 30,
-          height: 30,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: onTap == null ? Colors.white10 : Colors.white24,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Icon(
-            icon,
-            size: 16,
-            color: onTap == null ? Colors.white24 : Colors.white70,
+    // 리플: 네모 배경은 Ink 로 칠하고(스플래시가 그 위에 뜨게), InkWell 은 여백까지
+    // 덮어 눌리는 자리(38×44)를 그대로 유지한다.
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+          child: Ink(
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              color: onTap == null ? Colors.white10 : Colors.white24,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Center(
+              child: Icon(
+                icon,
+                size: 16,
+                color: onTap == null ? Colors.white24 : Colors.white70,
+              ),
+            ),
           ),
         ),
       ),
@@ -2789,23 +2810,36 @@ class _AddSection extends StatelessWidget {
     runSpacing: 6,
     children: [
       for (var i = 0; i < scenes.length; i++)
-        GestureDetector(
-          onTap: () => onAdd(i),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            // 긴 이름 하나가 한 줄을 통째로 먹지 않게 — 잘려도 색과
-            // 자리로 어느 씬인지 안다.
-            constraints: const BoxConstraints(maxWidth: 150),
-            decoration: BoxDecoration(
-              color: _sceneColor(i).withValues(alpha: 0.25),
+        // 긴 이름 하나가 한 줄을 통째로 먹지 않게 — 잘려도 색과
+        // 자리로 어느 씬인지 안다. (maxWidth 는 칩 바깥에 둬 padding 포함 폭이
+        // 전과 같게 유지된다.)
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 150),
+          // 리플: 칩 배경이 불투명이라 Ink 로 칠하고 그 위에 스플래시.
+          child: Material(
+            type: MaterialType.transparency,
+            child: InkWell(
+              onTap: () => onAdd(i),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: _sceneColor(i).withValues(alpha: 0.6)),
-            ),
-            child: Text(
-              scenes[i].name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700),
+              child: Ink(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                decoration: BoxDecoration(
+                  color: _sceneColor(i).withValues(alpha: 0.25),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _sceneColor(i).withValues(alpha: 0.6),
+                  ),
+                ),
+                child: Text(
+                  scenes[i].name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -2815,44 +2849,52 @@ class _AddSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (compact) {
-      return GestureDetector(
-        onTap: () => showModalBottomSheet<void>(
-          context: context,
-          backgroundColor: const Color(0xFF1a1a1a),
-          builder: (sheetContext) => SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '＋구간 붙이기',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 10),
-                  _chips(sheetContext),
-                ],
+      // 리플: 눌러야 시트가 뜨는 버튼 — 테두리 안에 스플래시가 뜨게 Ink 로 그린다.
+      return Material(
+        type: MaterialType.transparency,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(9),
+          onTap: () => showModalBottomSheet<void>(
+            context: context,
+            backgroundColor: const Color(0xFF1a1a1a),
+            builder: (sheetContext) => SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '＋구간 붙이기',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _chips(sheetContext),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-        child: Container(
-          height: 40,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(9),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: const Row(
-            children: [
-              Text(
-                '＋구간 붙이기',
-                style: TextStyle(fontSize: 12.5, color: Colors.white70),
-              ),
-              Spacer(),
-              Icon(Icons.chevron_right, size: 18, color: Colors.white38),
-            ],
+          child: Ink(
+            height: 40,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: Colors.white24),
+            ),
+            child: const Row(
+              children: [
+                Text(
+                  '＋구간 붙이기',
+                  style: TextStyle(fontSize: 12.5, color: Colors.white70),
+                ),
+                Spacer(),
+                Icon(Icons.chevron_right, size: 18, color: Colors.white38),
+              ],
+            ),
           ),
         ),
       );
@@ -2916,27 +2958,33 @@ class _LengthBar extends StatelessWidget {
           for (final e in kSongTargets.entries)
             Padding(
               padding: const EdgeInsets.only(right: 6),
-              child: GestureDetector(
-                onTap: () => onFit(e.value),
-                child: Container(
-                  height: 34, // 손가락 바닥선
-                  padding: const EdgeInsets.symmetric(horizontal: 13),
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    // 지금 길이에 제일 가까운 것을 켜 둔다 — 「지금 어디쯤인가」가 보인다
-                    color: _nearest(total) == e.key
-                        ? Colors.deepPurple.shade400
-                        : Colors.white10,
-                    borderRadius: BorderRadius.circular(9),
-                  ),
-                  child: Text(
-                    '${e.key} ${_mmss(e.value)}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w800,
+              // 리플: 칩 배경이 불투명이라 Ink 로 칠하고 그 위에 스플래시.
+              child: Material(
+                type: MaterialType.transparency,
+                child: InkWell(
+                  onTap: () => onFit(e.value),
+                  borderRadius: BorderRadius.circular(9),
+                  child: Ink(
+                    height: 34, // 손가락 바닥선
+                    padding: const EdgeInsets.symmetric(horizontal: 13),
+                    decoration: BoxDecoration(
+                      // 지금 길이에 제일 가까운 것을 켜 둔다 — 「지금 어디쯤인가」가 보인다
                       color: _nearest(total) == e.key
-                          ? Colors.white
-                          : Colors.white54,
+                          ? Colors.deepPurple.shade400
+                          : Colors.white10,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${e.key} ${_mmss(e.value)}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: _nearest(total) == e.key
+                              ? Colors.white
+                              : Colors.white54,
+                        ),
+                      ),
                     ),
                   ),
                 ),
