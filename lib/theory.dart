@@ -363,6 +363,38 @@ List<int> voiceLead(List<int> chord, List<int>? prev, {int oct = 0}) {
   return best ?? chord;
 }
 
+// ── 손으로 고른 자리바꿈(전위) — 두들 코드 단계의 위아래 쓸기 ──
+//
+// [voiceLead] 는 "앞 코드와 제일 가깝게"를 스스로 고른다 — 진행을 매끄럽게
+// 잇는 데는 맞지만, 사람이 "지금은 1전위로 쳐줘"라고 **직접 고르는** 것과는
+// 뜻이 다르다. 사용자 지적(2026-09-24): "옥타브를 왜 쓰니 보이싱을 바꾸라고
+// (135)(351)(531) 이렇게" — 위로 쓸 때마다 기본형→1전위→2전위로 돈다.
+//
+// **prev(앞 코드)를 안 본다.** voiceLead 처럼 앞 화음에 맞춰 매번 다른 자리를
+// 고르면, 같은 손짓(같은 voicing 값)이 매번 다른 소리를 낼 수 있다 — 손이
+// 외울 수가 없다. 같은 스펙 + 같은 voicing 은 **항상 같은 음**을 낸다
+// (순서·이력 무관 — 그래서 연주 중 들리는 소리와 재생되는 소리가 그대로 같다).
+List<int> invertChord(List<int> chord, int voicing) {
+  if (chord.length < 2) return chord;
+  var v = [...chord]..sort();
+  final n = voicing % v.length;
+  for (var i = 0; i < n; i++) {
+    v = [...v.sublist(1), v.first + 12]..sort();
+  }
+  return v;
+}
+
+/// 자리바꿈 배지에 적을 도수들 — `(135)(351)(531)` 순서 그대로.
+/// [toneCount] 는 지금 화음의 음 개수(3화음=3, 7화음=4 …), [voicing] 은
+/// [invertChord] 와 같은 값이다. 0번째 도수가 한 옥타브 위로 올라가는 것과
+/// 같은 뜻이라 **왼쪽으로 돈다**: voicing=1 → [3,5,…,1].
+List<int> voicingDegreeLabels(int toneCount, int voicing) {
+  if (toneCount <= 0) return const [];
+  final degrees = [for (var i = 0; i < toneCount; i++) 1 + 2 * i];
+  final v = voicing % degrees.length;
+  return [...degrees.sublist(v), ...degrees.sublist(0, v)];
+}
+
 /// 코드 하나의 성질(장/단/dim) — 웹 `chordQual()`.
 String _chordQual(List<int> off) {
   final t3 = off[1] - off[0], f5 = off[2] - off[0];

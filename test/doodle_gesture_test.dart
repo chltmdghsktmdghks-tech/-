@@ -8,7 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:music_doodle_engine/patterns.dart';
 import 'package:music_doodle_engine/prog_ops.dart';
 import 'package:music_doodle_engine/tap_rec.dart';
-import 'package:music_doodle_engine/theory.dart';
+import 'package:music_doodle_engine/theory.dart'
+    show
+        MusicKey,
+        chordMidiOf,
+        diatonicChords,
+        invertChord,
+        midiFreq,
+        voicingDegreeLabels;
 
 /// 2마디 32칸에 I → vi 가 걸린 진행.
 List<ProgSlot> _prog() => readProg(const [
@@ -98,6 +105,65 @@ void main() {
       expect(seventh.length, greaterThan(triad.length), reason: '음이 하나 는다');
       expect((seventh.first - triad.first).abs() < 0.01, isTrue,
           reason: '뿌리음은 안 바뀌어야 같은 자리의 같은 코드다');
+    });
+  });
+
+  group('코드 자리바꿈(전위) — 위아래 쓸기가 옥타브가 아니라 보이싱', () {
+    // 사용자 지적(2026-09-24): "옥타브를 왜 쓰니 보이싱을 바꾸라고
+    // (135)(351)(531) 이렇게" — 위로 쓸 때마다 기본형→1전위→2전위로 돈다.
+    const key = MusicKey(root: 0, mode: 'major'); // C장조 — 암산하기 쉽다
+    final triad = diatonicChords(key)[0]; // I = C major
+
+    test('invertChord 는 밑음을 한 옥타브씩 올려 자리를 돈다', () {
+      final mid = chordMidiOf(triad); // [60, 64, 67] = C4 E4 G4
+      expect(mid, [60, 64, 67]);
+      expect(invertChord(mid, 0), [60, 64, 67], reason: '기본형(135)');
+      expect(invertChord(mid, 1), [64, 67, 72], reason: '1전위(351) — 뿌리가 위로');
+      expect(invertChord(mid, 2), [67, 72, 76], reason: '2전위(531) — 3음까지 위로');
+      // 3(=음 개수)바퀴 돌면 나머지가 0이라 기본형 그대로다(늘 %길이).
+      expect(invertChord(mid, 3), [60, 64, 67]);
+    });
+
+    test('배지 숫자가 (135)(351)(531) 순서 그대로다', () {
+      expect(voicingDegreeLabels(3, 0), [1, 3, 5]);
+      expect(voicingDegreeLabels(3, 1), [3, 5, 1]);
+      expect(voicingDegreeLabels(3, 2), [5, 1, 3]);
+    });
+
+    test('연주(친 소리) 계산과 재생(buildChordPattern) 계산이 같은 음을 낸다', () {
+      // `_chordDown`(연주)이 하는 일을 그대로 흉내 낸다: chordMidiOf → invertChord.
+      // `buildChordPattern`(재생)은 n[6]에 적힌 전위를 보고 똑같이 계산해야 한다
+      // — 그래야 「사용하기」 뒤에도 방금 들은 소리가 그대로 재생된다.
+      for (var v = 0; v < 3; v++) {
+        final playedMidi = invertChord(chordMidiOf(triad), v);
+        final playedFreqs = [for (final m in playedMidi) midiFreq(m)];
+
+        final recorded = buildChordPattern(
+          NotePatternDef('p', 1, 1, [
+            <Object?>[0, 0, 8, 2, null, null, v],
+          ]),
+          key,
+        );
+
+        expect(recorded.single.freqs.length, playedFreqs.length,
+            reason: '전위 $v: 음 개수부터 같아야 한다');
+        for (var i = 0; i < playedFreqs.length; i++) {
+          expect(recorded.single.freqs[i], closeTo(playedFreqs[i], 0.01),
+              reason: '전위 $v: ${i + 1}번째 음이 친 소리와 달라졌다');
+        }
+      }
+    });
+
+    test('전위를 안 적은 옛 음(n[6] 없음)은 그대로 voiceLead 자동 전위를 쓴다', () {
+      // 호환 확인 — 라이브러리 패턴·편집기로 새로 찍은 음처럼 6칸짜리도 안
+      // 되는 짧은 행이 예전과 똑같이 동작해야 기존 곡·기존 시험이 안 깨진다.
+      final withoutVoicing = buildChordPattern(
+        NotePatternDef('p', 1, 1, const [
+          <Object?>[0, 0, 8, 2],
+        ]),
+        key,
+      );
+      expect(withoutVoicing.single.freqs.length, 3);
     });
   });
 

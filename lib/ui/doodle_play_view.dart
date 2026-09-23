@@ -37,7 +37,7 @@ import 'package:flutter/services.dart';
 import '../audio_isolate.dart';
 import '../edit_ops.dart' show DrumOps;
 import '../genres.dart' show genreDef;
-import '../live_ops.dart' show LivePads, beatsToSend, metroBatch;
+import '../live_ops.dart' show beatsToSend, metroBatch;
 import '../meter.dart';
 import '../patterns.dart' show NotePatternDef;
 import '../prog_ops.dart' show ProgSlot, kMaxDegree;
@@ -50,12 +50,16 @@ import '../theory.dart'
         ChordSpec,
         MusicKey,
         buildChordText,
-        chordFreqsOf,
+        chordMidiOf,
         degreeFreq,
         diatonicChords,
+        guitarChordMidi,
+        invertChord,
         kChordTypeIntervals,
+        midiFreq,
         parseChordText,
-        scaleOf;
+        scaleOf,
+        voicingDegreeLabels;
 import 'editor_view.dart';
 import 'play_head.dart';
 
@@ -282,9 +286,20 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// HOLD 중인가 — 화면 표시에 쓴다.
   bool get _pressed => _fingers.values.any((f) => !f.swiped);
 
-  /// 음 높이 옮기기 — 위로 쓸면 +1(한 옥타브 위), 아래로 쓸면 −1.
-  /// 드럼은 음 높이가 없어서 안 쓴다.
-  int _octShift = 0;
+  /// 코드 자리바꿈(전위) — 0=기본형(135), 1=1전위(351), 2=2전위(531).
+  /// 위로 쓸면 다음 전위로, 계속 쓸면 다시 처음으로 돈다(사용자 지적,
+  /// 2026-09-24: "옥타브를 왜 쓰니 보이싱을 바꾸라고"). 드럼은 안 쓴다.
+  int _voicing = 0;
+
+  /// 방금 낸 화음의 음 개수 — 배지에 몇 자리(135/1357/…)를 적을지 정한다.
+  int _chordToneCount = 3;
+
+  /// step → 그 칸을 쳤을 때의 [_voicing] 값. **소리와 기록이 같은 자리바꿈을
+  /// 쓰게 하는 자리다** — `_chordDown`(연주)과 `buildChordPattern`(재생)이
+  /// 둘 다 `invertChord` 하나만 쓰게 만들려면, 재생 쪽도 그 칸을 칠 때
+  /// 실제로 어떤 전위였는지 알아야 한다(마지막에 딱 하나로 굳혀 전체에
+  /// 씌우면, 녹음 도중 전위를 바꾼 경우 소리와 기록이 갈린다).
+  final Map<int, int> _voicingOf = {};
 
   /// 방금 친 순간(화면 이펙트용) — null 이면 안 친 상태.
   DateTime? _hitAt;
@@ -578,12 +593,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _glideAt.clear();
     _staccatoAt.clear();
     _chordTypeOf.clear();
+    _voicingOf.clear();
     _rollSteps.clear();
     _chordFirstAt = null;
     _chordFirstStep = -1;
     _chordFingers = 0;
     _hitAt = null;
-    _octShift = 0;
+    _voicing = 0;
     // 잡고 있던 것을 **손가락 수만큼** 놓는다 — `_kHoldId` 하나만 놓으면
     // 두 번째 손가락 이후가 계속 울린다(판마다 +pad 로 쓰기 때문이다).
     for (var i = 0; i < _kMaxFingers; i++) {
@@ -814,7 +830,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   ///
   /// `tapToNotes` 는 박자만 담는 함수라 세기를 늘 2로 적고 높이도 그 칸의
   /// 기본음으로만 적는다. 여기서 칸 번호로 맞춰 갈아 끼운다.
-  /// 행 모양은 `[도수, 칸, 길이, 세기, 글라이드·코드종류, 층]`.
+  /// 행 모양은 `[도수, 칸, 길이, 세기, 글라이드·코드종류, 층, 전위]`.
   ///
   /// **베이스와 코드가 다섯째 칸을 서로 다르게 읽는다** — 낱음 줄은
   /// `n[4]==1` 을 "앞 음에서 미끄러짐"으로(`buildRowsPattern`), 코드 줄은
@@ -824,6 +840,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 코드 줄에는 **좌우로 고른 음을 절대 더하지 않는다.** 코드 줄의 첫 칸은
   /// 도수가 아니라 **코드 번호**(`% chords.length` 로 읽힌다)라, 거기 3·5·7도를
   /// 더하면 친 것과 전혀 다른 코드가 적힌다 — 들린 Am 이 다른 코드로 저장됐다.
+  ///
+  /// **일곱째 칸(`n[6]`)은 전위다** — `_voicingOf[step]`(그 칸을 쳤을 때의
+  /// `_voicing`)을 그대로 못 박는다. 여섯째 칸(층·`voiceLead` 의 `oct`)은
+  /// 이 화면에서 안 쓰므로 늘 비운다 — 다른 화면(편집기의 다중 코드 트랙
+  /// 층 나누기)이 쓰는 자리라 건드리면 그쪽이 깨진다.
   List<List<Object?>> _decorate(
     List<List<Object?>> rows, {
     required bool chord,
@@ -836,11 +857,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           final vel = _velOf[step] ?? r[3];
           if (chord) {
             final ty = _chordTypeOf[step];
-            // 층(`n[5]`)은 `tapToNotes(oct:)` 가 이미 적어 뒀다 — 살려 둔다.
-            final oct = r.length > 5 ? r[5] : null;
-            if (ty == null && oct == null) return <Object?>[r[0], step, len, vel];
-            if (oct == null) return <Object?>[r[0], step, len, vel, ty];
-            return <Object?>[r[0], step, len, vel, ty, oct];
+            final voicing = _voicingOf[step] ?? 0;
+            // **늘 적는다** — 0(기본형)도 값이다. 비워 두면 재생 쪽이 옛
+            // `voiceLead` 자동 전위로 되돌아가, 연주 때 들은 것과 갈린다.
+            return <Object?>[r[0], step, len, vel, ty, null, voicing];
           }
           // 낱음 줄(베이스) — **소리 낼 때 쓴 바로 그 함수**로 도수를 구한다.
           // `tapToNotes` 가 적어 둔 `r[0]` 은 좌우·옥타브를 모르는 기본음이다.
@@ -1034,7 +1054,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 그래서 베이스의 옥타브는 0/+1 두 칸뿐이다(`_pressMove` 에서 막는다).
   int _writeDegree(int step, int tone) {
     final base = _degreeAt(step, type: 'bass', chord: false);
-    return (base + tone + 7 * (_octShift > 0 ? 1 : 0)).clamp(0, kMaxDegree);
+    // `_voicing` 은 코드 단계 전용 쓸기로만 바뀐다(`_pressMove` 의 `!_hasTone`
+    // 분기) — 베이스는 그 분기를 안 타니(사다리로 일찍 빠진다) 여기서는 늘 0.
+    return (base + tone + 7 * (_voicing > 0 ? 1 : 0)).clamp(0, kMaxDegree);
   }
 
   /// 코드 한 방 — **두께**(같이 닿은 손가락 수)가 3화음/7화음/9화음을 정한다.
@@ -1062,19 +1084,26 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final degree = _degreeAt(step, type: 'chord', chord: true);
     final text = _thickText(key, degree, thick);
     final spec = _specOf(key, degree, text);
-    final oct = LivePads.octMul(_octShift);
+    // **친 소리 = 적힌 음.** 재생 쪽(`buildChordPattern`)도 기타/나일론이면
+    // `guitarChordMidi`(바레 모양, 자리바꿈 없음)를, 아니면 `invertChord`
+    // 하나만 쓴다 — 여기서 같은 두 갈래를 그대로 따라야 소리와 기록이 갈리지
+    // 않는다.
+    final isGuitar = _chordTrack.voice == 'guitar' || _chordTrack.voice == 'nylon';
+    final voicedMidi = isGuitar
+        ? guitarChordMidi(spec)
+        : invertChord(chordMidiOf(spec), _voicing);
+    _chordToneCount = voicedMidi.length.clamp(1, _kMaxChordTones);
     // **잡고 있는 소리로 낸다.** 예전엔 `batch` 로 8초짜리 한 방을 냈는데,
     // `batch` 는 번호가 없어서 `holdOff` 로 못 끊는다 — 떼도 8초를 울렸고,
     // 두께가 바뀌면 앞 화음 위에 새 화음이 겹쳐 지저분해진다.
     for (var i = 0; i < _kMaxChordTones; i++) {
       widget.host?.holdOff(_kChordId + i);
     }
-    final freqs = chordFreqsOf(spec);
-    for (var i = 0; i < freqs.length && i < _kMaxChordTones; i++) {
+    for (var i = 0; i < voicedMidi.length && i < _kMaxChordTones; i++) {
       widget.host?.holdOn(
         _kChordId + i,
         _chordTrack.voice,
-        freqs[i] * oct,
+        midiFreq(voicedMidi[i]),
         vel,
         part: kPartLive,
       );
@@ -1085,6 +1114,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       } else {
         _chordTypeOf.remove(step);
       }
+      // 지금 전위를 이 칸에 못 박는다 — `_decorate` 가 판에 적을 때 그대로
+      // 살려 `buildChordPattern` 도 같은 자리로 재생하게 한다.
+      _voicingOf[step] = _voicing;
     }
   }
 
@@ -1137,7 +1169,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// **미끄러진다**. 옥타브 쓸기는 없다 — 사다리가 그 자리를 가져갔고,
   /// 한 축에 두 뜻을 얹으면 사람이 구분해서 움직일 수 없다.
   ///
-  /// **코드**는 사다리가 없으므로 예전대로 위아래 쓸기 = 옥타브다.
+  /// **코드**는 사다리가 없다. 위아래 쓸기 = **자리바꿈**(전위) — 옥타브가
+  /// 아니다(사용자 지적, 2026-09-24: "옥타브를 왜 쓰니 보이싱을 바꾸라고").
+  /// 옥타브는 통째로 음정만 옮길 뿐 화음 색이 안 바뀌고, 전위는 같은
+  /// 음들로 자리만 돌려 소리 색이 실제로 바뀐다 — 두들이 가르치려는 것에
+  /// 더 가깝다.
   void _pressMove(int pointer, Offset at, Size area) {
     final f = _fingers[pointer];
     if (f == null || f.swiped || !_hasPitch) return;
@@ -1154,7 +1190,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       return;
     }
 
-    // ── 코드: 위아래 쓸기 = 옥타브 ──
+    // ── 코드: 위아래 쓸기 = 자리바꿈(전위) ──
     // 쓸기는 **닿은 직후 한 동작만** 본다. 시간 제한이 없던 때에는, 긴 음을
     // 1~2초 잡고 있는 동안 손가락이 천천히 흘러내리기만 해도 쓸기로 읽혀
     // `holdOff` + `cancel` 이 돌았다 — 그 음이 **소리도 기록도 없이** 사라졌다.
@@ -1166,7 +1202,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // **코드 화음을 끈다** — 옛날엔 `_kHoldId + f.pad`(베이스용 번호)를 껐는데,
       // 코드 단계에서 실제로 울리는 소리는 `_chordDown` 이 `_kChordId + i` 로 켠
       // 화음 음들이다. 켠 적도 없는 번호를 꺼 봐야 아무 일도 안 일어나, 쓸어도
-      // 옛 화음이 계속 울리고 `_octShift` 만 바뀌어 옥타브가 귀에 반영되지 않았다
+      // 옛 화음이 계속 울리고 `_voicing` 만 바뀌어 전위가 귀에 반영되지 않았다
       // (검수에서 잡음). 이 분기는 코드 단계 전용이라(_hasTone 이면 위에서 이미
       // 사다리로 빠진다) 화음 번호를 다 놓는 게 맞다.
       for (var i = 0; i < _kMaxChordTones; i++) {
@@ -1175,8 +1211,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       _rec?.cancel(f.pad);
       HapticFeedback.selectionClick();
       setState(() {
-        // 위로 쓸면 위 옥타브(화면 좌표는 위가 작은 값이라 부호가 뒤집힌다).
-        _octShift = (_octShift + (dy < 0 ? 1 : -1)).clamp(-1, 1);
+        // 위로 쓸면 다음 전위, 계속 쓸면 다시 기본형으로 돈다(0→1→2→0…).
+        // 화면 좌표는 위가 작은 값이라 부호가 뒤집힌다. Dart 의 `%` 는
+        // 나머지가 늘 0 이상이라 −1 이 나와도 2 로 정확히 돈다.
+        _voicing = (_voicing + (dy < 0 ? 1 : -1)) % 3;
       });
     }
   }
@@ -1437,7 +1475,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           chord: true,
           chromatic: false,
           mode: widget.transport.mode,
-          oct: _octShift,
+          // 층(`oct`)은 이 화면에서 안 쓴다 — 전위는 `_decorate` 가
+          // `_voicingOf` 로 따로(일곱째 칸에) 적는다.
         ), chord: true);
         widget.project.putUserPattern(
           'chord',
@@ -1740,10 +1779,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     ];
   }
 
-  /// 지금 음 높이가 몇 옥타브 옮겨져 있나 — 0이면 아무것도 안 띄운다
-  /// (기본 상태에까지 이름표를 달면 화면만 시끄럽다).
-  Widget _octBadge() {
-    if (!_hasPitch || _octShift == 0) return const SizedBox(height: 26);
+  /// 지금 코드가 몇 번째 자리바꿈인가 — `(135)(351)(531)`. 0(기본형)이면
+  /// 아무것도 안 띄운다(기본 상태에까지 이름표를 달면 화면만 시끄럽다).
+  Widget _voicingBadge() {
+    if (_stageDef.kind != DoodleKind.chord || _voicing == 0) {
+      return const SizedBox(height: 26);
+    }
+    final digits = voicingDegreeLabels(_chordToneCount, _voicing)
+        .map((d) => '$d')
+        .join();
     // `Container` 에 `alignment` 를 주면 부모 폭을 다 먹는다 — `Center` 로
     // 감싸야 글자만큼만 차지하는 이름표가 된다(실기기에서 줄 전체로 늘어난
     // 것을 보고 잡았다).
@@ -1758,7 +1802,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           border: Border.all(color: _stageColor().withValues(alpha: 0.6)),
         ),
         child: Text(
-          _octShift > 0 ? '한 옥타브 위' : '한 옥타브 아래',
+          '$_voicing전위 ($digits)',
           style: TextStyle(
             color: _stageColor(),
             fontSize: 12,
@@ -1839,7 +1883,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          _octBadge(),
+                          _voicingBadge(),
                         ],
                       ),
                     ),
@@ -1906,7 +1950,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           '잡은 채 위아래로 끌면 미끄러집니다',
     DoodleKind.chord =>
       '아무 데나 쳐도 됩니다 · 한가운데가 세게\n'
-          '손가락 두 개면 7화음, 세 개면 9화음 · 위아래로 쓸면 한 옥타브',
+          '손가락 두 개면 7화음, 세 개면 9화음 · 위아래로 쓸면 자리바꿈',
   };
 
   /// **세기 과녁** — 한가운데가 세게, 가장자리가 여리게(`_velFromCenter`).

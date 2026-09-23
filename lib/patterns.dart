@@ -2019,6 +2019,10 @@ List<ChordHit> buildChordPattern(
   final chords = diatonicChords(key);
   final specs = <ChordSpec>[];
   final octs = <int>[];
+  // 두들 코드 단계의 위아래 쓸기가 적어 둔 **고정 전위**(7번째 칸, n[6]) —
+  // 있으면 그 자리로 그대로 낸다. 없으면(라이브러리 패턴·편집기로 새로 찍은
+  // 음) 예전처럼 `voiceLead` 가 앞 코드와 가장 가깝게 고른다.
+  final voicings = <int?>[];
   for (final n in tiled) {
     final idx = ((n[0] as int) % chords.length + chords.length) % chords.length;
     var spec = chords[idx];
@@ -2038,6 +2042,7 @@ List<ChordHit> buildChordPattern(
     }
     specs.add(spec);
     octs.add(n.length > 5 && n[5] is int ? n[5] as int : 0);
+    voicings.add(n.length > 6 && n[6] is int ? n[6] as int : null);
   }
 
   // ── 자리바꿈으로 잇는다 (theory.dart `voiceLead`) ──
@@ -2050,11 +2055,21 @@ List<ChordHit> buildChordPattern(
     voiced = <List<int>>[];
     for (var si = 0; si < specs.length; si++) {
       final spec = specs[si];
-      // 슬래시 코드는 맨 밑음이 정해져 있다 — 자리를 안 바꾼다.
+      final fixedVoicing = voicings[si];
+      // 슬래시 코드는 맨 밑음이 정해져 있다 — 자리를 안 바꾼다. 기타는
+      // 바레 코드 손 모양이라 자리바꿈 자체가 뜻이 없다(둘 다 voiceLead 도
+      // 고정 전위도 건너뛴다 — `guitarChordMidi` 가 이미 다 정해 준다).
       final mid = isGuitar ? guitarChordMidi(spec) : chordMidiOf(spec);
-      final v = (spec.bass != null || isGuitar)
-          ? mid
-          : voiceLead(mid, prev, oct: octs[si]);
+      List<int> v;
+      if (spec.bass != null || isGuitar) {
+        v = mid;
+      } else if (fixedVoicing != null) {
+        // **연주 때 들은 것과 같은 계산** — `_chordDown` 도 `invertChord` 하나만
+        // 쓴다(이력·앞 코드 무관, 늘 같은 입력이면 같은 자리).
+        v = invertChord(mid, fixedVoicing);
+      } else {
+        v = voiceLead(mid, prev, oct: octs[si]);
+      }
       voiced.add(v);
       prev = v;
     }
