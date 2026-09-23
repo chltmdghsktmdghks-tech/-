@@ -936,7 +936,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 그냥 돌아가서, 대기·미리 세기 동안(길면 6초) 눌러도 소리도 화면도
     // 아무 반응이 없었다 — 사용자에겐 "눌러도 안 되는 화면"으로 보인다.
     // 담는 것만 녹음 중에 하고, 들려주는 것은 늘 한다.
-    if (_fingers.containsKey(pointer) || _fingers.length >= _kMaxFingers) return;
+    //
+    // **베이스는 한 손가락만.** 단선율 악기라 두 음이 동시에 찍히면 의도치 않은
+    // 화음 베이스가 된다 — 손이 스치거나 무심코 두 손가락으로 짚기만 해도
+    // 그랬다(제스처 검수에서 잡음). 사용자 방침도 "웬만하면 한 손가락"이다.
+    // 드럼(두 손 번갈아 연타)·코드(손가락 수가 화음 두께)는 여러 개가 뜻이 있어
+    // 그대로 둔다.
+    final maxFingers = _hasTone ? 1 : _kMaxFingers;
+    if (_fingers.containsKey(pointer) || _fingers.length >= maxFingers) return;
     final cs = _clockState;
     final recording = cs != null && cs.phase == TapPhase.rec;
     final pos = _clock.pos(_loopSec);
