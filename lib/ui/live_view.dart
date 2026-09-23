@@ -549,7 +549,10 @@ class _LiveViewState extends State<LiveView> {
   /// 친 걸 **바로 트랙으로 만든다** — 어디에 담을지 묻지 않는다.
   /// 담기는 곳은 지금 씬의 「라이브」 트랙이고, 이름은 씬을 따라간다
   /// (같은 씬에서 다시 치면 덮어쓴다 — 마음에 들 때까지 다시 치는 게 자연스럽다).
-  void _keep(List<List<Object?>> notes) {
+  ///
+  /// [announce] 를 주면 마지막 안내 문구를 그것으로 바꾼다 — 「정지」가 녹음까지
+  /// 멈추는 경우처럼, 왜 담겼는지를 다르게 알려야 할 때 쓴다.
+  void _keep(List<List<Object?>> notes, {String? announce}) {
     final p = widget.project;
     final t = p.ensureLiveTrack(widget.live.voice);
     final name = '라이브 ${p.scene.name}';
@@ -581,7 +584,10 @@ class _LiveViewState extends State<LiveView> {
         }
       }
     }
-    _say('${notes.length}음을 「라이브」 트랙에 담았습니다 — 다음 판부터 같이 납니다');
+    _say(
+      announce ??
+          '${notes.length}음을 「라이브」 트랙에 담았습니다 — 다음 판부터 같이 납니다',
+    );
   }
 
   void _say(String msg) {
@@ -601,9 +607,31 @@ class _LiveViewState extends State<LiveView> {
     final h = host;
     if (h == null) return;
     if (widget.transport.playing) {
+      // **정지는 녹음까지 멈춘다.** 반주만 끄고 `_rec` 을 살려 두면, 멈춘 뒤로
+      // `_clock.pos` 가 마지막 위치에 얼어붙어(루프가 안 도니 「지금 몇 박」이
+      // 없다) 그 뒤 친 음이 전부 같은 칸에 겹쳐 찍힌다. 사용자는 정지가
+      // 녹음까지 멈춘 걸 모른다 — 담긴 것을 잃지 않게 갈무리하고 알린다
+      // (뒤로가기·탭전환에서 쓰는 `_keep` 담기 경로를 그대로 쓴다).
+      //
+      // `playing` 을 **먼저** 내려야 `_keep` 이 루프를 다시 켜지 않는다
+      // (`_keep` 은 재생 중일 때만 루프를 새로 돌린다).
+      widget.transport.playing = false;
+      final rec = _rec;
+      if (rec != null) {
+        final notes = rec.notes();
+        _rec = null;
+        if (notes.isNotEmpty) {
+          _keep(
+            notes,
+            announce: '정지하며 녹음도 멈췄습니다 — '
+                '${notes.length}음을 「라이브」 트랙에 담았습니다',
+          );
+        } else {
+          _say('정지하며 녹음도 멈췄습니다');
+        }
+      }
       h.allOff();
       h.setSongMode(false);
-      widget.transport.playing = false;
     } else {
       SceneSequencer.playLoop(widget.project, widget.transport, h);
       widget.transport.playing = true;

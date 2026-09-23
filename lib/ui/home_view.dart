@@ -952,22 +952,36 @@ class _ProjectCard extends StatelessWidget {
         // 지우기 — **확인 창 없이 바로 지우고 되돌리기를 준다**(이 앱의
         // 삭제는 늘 이 규칙, `songs_view.dart` 와 같다).
         if (onDelete != null)
+          // 히트 영역을 44dp 로 넓힌다 — 카드 전체 '열기' InkWell 위에 겹쳐
+          // 있어 오조작(열려다 삭제)이 나던 것을 줄인다. 보이는 ✕ 동그라미는
+          // 그대로 오른쪽 위 모서리에 두고(Align+Padding), 실제로 손끝이 닿는
+          // 곳만 투명하게 키운다. 삭제 동작·되돌리기 스낵바는 그대로.
           Positioned(
-            right: 4,
-            top: 4,
+            right: 0,
+            top: 0,
             child: InkWell(
               onTap: onDelete,
-              borderRadius: BorderRadius.circular(20),
-              child: Container(
-                padding: const EdgeInsets.all(5),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Icon(
-                  Icons.close,
-                  size: 13,
-                  color: Colors.white60,
+              customBorder: const CircleBorder(),
+              child: SizedBox(
+                width: 44,
+                height: 44,
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 4, top: 4),
+                    child: Container(
+                      padding: const EdgeInsets.all(5),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.45),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const Icon(
+                        Icons.close,
+                        size: 13,
+                        color: Colors.white60,
+                      ),
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -1406,8 +1420,9 @@ class _Start extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
+    return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(11),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
         decoration: BoxDecoration(

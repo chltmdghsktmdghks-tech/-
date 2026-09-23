@@ -345,11 +345,15 @@ class _PortraitSwitcher extends StatefulWidget {
 }
 
 class _PortraitSwitcherState extends State<_PortraitSwitcher> {
-  bool? _rows;
+  // 처음 열릴 때의 트랙 수로 **한 번만** 정한다. 트랙이 5↔6 경계를 오가도
+  // 여기서 자동으로 뒤집지 않는다(예전엔 매 빌드마다 count 로 다시 계산해,
+  // 트랙 하나 늘고 줄 때마다 사용자 조작 없이 레이아웃이 통째로 바뀌었다).
+  // 사용자가 「한눈에/자세히」를 누르면 그 선택이 늘 이긴다.
+  late bool _rows = widget.count > 5;
 
   @override
   Widget build(BuildContext context) {
-    final rows = _rows ?? widget.count > 5;
+    final rows = _rows;
     return Column(
       children: [
         _ViewBar(
@@ -504,18 +508,21 @@ class BigSlider extends StatelessWidget {
                   color: color,
                 ),
               ),
-              if (onReset != null) ...[
-                const SizedBox(width: 10),
-                // 되돌리기 — 손으로 가운데를 정확히 맞추기는 어렵다
-                GestureDetector(
-                  onTap: onReset,
-                  child: const Icon(
-                    Icons.restart_alt,
-                    size: 17,
-                    color: Colors.white38,
+              if (onReset != null)
+                // 되돌리기 — 아이콘은 작게, 히트영역은 44dp 로(손끝 기준)
+                SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: InkResponse(
+                    onTap: onReset,
+                    radius: 24,
+                    child: const Icon(
+                      Icons.restart_alt,
+                      size: 17,
+                      color: Colors.white38,
+                    ),
                   ),
                 ),
-              ],
             ],
           ),
           SizedBox(
@@ -1964,44 +1971,97 @@ class _StripShell extends StatelessWidget {
         opacity: dimmed ? 0.55 : 1,
         child: Column(
           children: [
-            GestureDetector(
+            _StripHead(
+              color: color,
+              title: title,
+              subtitle: subtitle,
               onTap: onTapHead,
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.22),
-                  borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(9),
-                  ),
-                ),
-                child: Column(
-                  children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        color: onTapHead != null ? color : Colors.white54,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
             ),
             ...children,
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 스트립 머리. **누르는 뜻이 있을 때만** 리플과 눌림을 준다 — 라이브 스트립은
+/// 여기를 눌러 소리를 고른다([onTap] 있음). 일반 트랙·마스터는 누를 게 없으므로
+/// 리플·GestureDetector 없이 그냥 라벨로 둔다(예전엔 셋 다 똑같이 눌리는 것처럼
+/// 보여, 눌러도 반응이 없다는 오해를 줬다). 부제 색으로도 구분한다 — 누를 수
+/// 있으면 트랙색, 아니면 흐린 흰색.
+class _StripHead extends StatelessWidget {
+  final Color color;
+  final String title, subtitle;
+  final VoidCallback? onTap;
+  const _StripHead({
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final tappable = onTap != null;
+    const radius = BorderRadius.vertical(top: Radius.circular(9));
+    final content = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 5),
+      child: Column(
+        children: [
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 2),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // 누를 수 있으면 색+아이콘으로 두 번 알린다(색만으로 뜻 주지 않기).
+              if (tappable) ...[
+                Icon(Icons.expand_more, size: 12, color: color),
+                const SizedBox(width: 2),
+              ],
+              Flexible(
+                child: Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    color: tappable ? color : Colors.white54,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+
+    if (!tappable) {
+      // 누를 게 없으면 눌리는 척도 하지 않는다.
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.22),
+          borderRadius: radius,
+        ),
+        child: SizedBox(width: double.infinity, child: content),
+      );
+    }
+    return Material(
+      color: Colors.transparent,
+      child: Ink(
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.22),
+          borderRadius: radius,
+        ),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: SizedBox(width: double.infinity, child: content),
         ),
       ),
     );
@@ -3026,19 +3086,24 @@ class _DuckSectionState extends State<_DuckSection> {
                 color: _kMasterColor,
               ),
             ),
-            const SizedBox(width: 10),
             // 되돌리기 — 사용자가 만졌던 값을 지우고 장르 기본값을 따르게.
-            GestureDetector(
-              onTap: usingDefault
-                  ? null
-                  : () => setState(() {
-                      p.duckAmountOverride = null;
-                      _push();
-                    }),
-              child: Icon(
-                Icons.restart_alt,
-                size: 17,
-                color: usingDefault ? Colors.white12 : Colors.white38,
+            // 아이콘은 작게, 히트영역은 44dp.
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: InkResponse(
+                onTap: usingDefault
+                    ? null
+                    : () => setState(() {
+                        p.duckAmountOverride = null;
+                        _push();
+                      }),
+                radius: 24,
+                child: Icon(
+                  Icons.restart_alt,
+                  size: 17,
+                  color: usingDefault ? Colors.white12 : Colors.white38,
+                ),
               ),
             ),
           ],
@@ -3081,18 +3146,23 @@ class _DuckSectionState extends State<_DuckSection> {
                 color: _kMasterColor,
               ),
             ),
-            const SizedBox(width: 10),
-            GestureDetector(
-              onTap: p.duckRelSec == 0.16
-                  ? null
-                  : () => setState(() {
-                      p.duckRelSec = 0.16;
-                      _push();
-                    }),
-              child: Icon(
-                Icons.restart_alt,
-                size: 17,
-                color: p.duckRelSec == 0.16 ? Colors.white12 : Colors.white38,
+            // 되돌리기 — 아이콘은 작게, 히트영역은 44dp.
+            SizedBox(
+              width: 44,
+              height: 44,
+              child: InkResponse(
+                onTap: p.duckRelSec == 0.16
+                    ? null
+                    : () => setState(() {
+                        p.duckRelSec = 0.16;
+                        _push();
+                      }),
+                radius: 24,
+                child: Icon(
+                  Icons.restart_alt,
+                  size: 17,
+                  color: p.duckRelSec == 0.16 ? Colors.white12 : Colors.white38,
+                ),
               ),
             ),
           ],
