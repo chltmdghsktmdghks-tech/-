@@ -47,6 +47,15 @@ class LoopClock {
     return (_pos + (_sw.elapsedMilliseconds - _atMs) / 1000 / loopSec) % 1.0;
   }
 
+  /// 엔진에 루프 되감기(`setLoop(restart:true)`)를 시킨 **직후**에 부른다 —
+  /// 캐시된 위치를 곧장 0으로 맞춘다. 안 맞추면 다음 실측(0.25초 간격)이
+  /// 올 때까지 보간이 되감기 전의 위치에서 앞으로 흘러, 그 사이에 만들어진
+  /// 새 `TapClock` 이 엉뚱한 자리에서 미리 세기를 시작한다.
+  void reset() {
+    _pos = 0;
+    _atMs = _sw.elapsedMilliseconds;
+  }
+
   void dispose() {
     _sub?.cancel();
     _sw.stop();

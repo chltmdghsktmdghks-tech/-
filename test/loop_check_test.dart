@@ -239,6 +239,26 @@ void main() {
           '${endMax.toStringAsFixed(5)}',
     );
 
+    // 6) restart:true 는 위치를 **머리(0)로 되감는다** (사용자 신고, 2026-09-23:
+    //    "악기 넘어갈 때 처음부터 흐름이 돌게"). 두들플레이가 단계를 넘길 때
+    //    `refreshLoop(restart: true)` 로 씬 루프를 되감는데, 그게 정말 위치를
+    //    0으로 돌리는지 — 엔진 단에서 보장하는지 — 를 여기서 잰다.
+    final e6 = Engine();
+    final l6 = LoopState()..set(<dynamic>[], _kickOnly(), loopSec, true, e6);
+    // 판 한가운데까지 돌려 위치가 실제로 중간에 가 있게 한다.
+    _run(e6, l6, loopSec * 2 + loopSec / 2);
+    final midPos = l6.posOf(l6.startAt + loopFrames ~/ 2); // 되감기 전, 판 한가운데(0.5)
+    // 내용은 그대로, restart 만 참으로 — refreshLoop(restart:true) 가 보내는 것.
+    l6.set(<dynamic>[], _kickOnly(), loopSec, true, e6);
+    // 되감은 직후, 렌더 커서(nowFrames)에서 읽은 위치는 0이어야 한다.
+    final afterPos = l6.posOf(e6.nowFrames);
+    check(
+      '6) restart 되감기',
+      l6.startAt == e6.nowFrames && afterPos.abs() < 1e-9,
+      '되감기 전 위치 ${midPos.toStringAsFixed(2)} → 후 ${afterPos.toStringAsFixed(2)}'
+          ' · startAt=nowFrames ${l6.startAt == e6.nowFrames}',
+    );
+
     // ignore: avoid_print
     print(fail == 0 ? '씬 루프 확인 통과' : '실패 $fail건');
     expect(fail, 0);

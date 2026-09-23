@@ -201,6 +201,101 @@ class _SceneViewState extends State<SceneView> {
   /// 씬 길이는 따로 저장된 값이 아니라 **제일 긴 패턴**이라, 한 트랙만 바꾸면
   /// 아무 일도 안 일어난 것처럼 보인다(`Project.setSceneBars` 주석 참고).
   void _setSceneBars(int b) {
+    final nb = b.clamp(1, 8);
+    // **줄여서 실제로 버려질 음이 있을 때만** 확인창을 띄운다. 늘리거나
+    // (타일링) 버릴 게 없으면 매번 묻는 건 성가시니 그냥 진행한다.
+    // `setSceneBars` 는 되돌리기가 없어서(project.dart:setSceneBars),
+    // 「쉬기」(_confirmRest)와 같은 방식으로 이름·개수를 대고 막아 준다.
+    final (dn, dd) = _sceneBarsDrop(nb);
+    if (dn + dd > 0) {
+      _confirmSceneShrink(nb, dn, dd);
+      return;
+    }
+    _applySceneBars(nb);
+  }
+
+  /// [nb] 마디로 줄이면 **범위 밖으로 밀려 사라질** 음·타격 수를 미리 센다.
+  /// `Project.setSceneBars` 가 실제로 버리는 것과 **같은 기준**(trimTo: 스텝이
+  /// `nb*spb` 이상이면 버림)으로 세므로 개수가 어긋나지 않는다.
+  /// 늘리거나 그대로면(현재 마디 ≤ nb) 버릴 게 없어 0.
+  (int, int) _sceneBarsDrop(int nb) {
+    var notes = 0, drums = 0;
+    final p = widget.project;
+    for (final t in p.tracks) {
+      final clip = p.scene.clips[t.id];
+      if (clip == null || !p.audible(t)) continue;
+      final cur = p.barsOf(t.type, clip);
+      if (cur <= nb) continue; // 늘리거나 그대로 — 버릴 게 없다
+      if (t.type == 'drum') {
+        final def = p.findDrum(clip);
+        if (def == null) continue;
+        final limit = nb * def.spb;
+        for (final list in def.hits.values) {
+          for (final s in list) {
+            if (s >= limit) drums++;
+          }
+        }
+      } else {
+        final def = p.findNote(t.type, clip);
+        if (def == null) continue;
+        final limit = nb * def.spb;
+        for (final n in def.notes) {
+          if ((n[1] as int) >= limit) notes++;
+        }
+        for (final n in def.also) {
+          if ((n[1] as int) >= limit) notes++;
+        }
+      }
+    }
+    return (notes, drums);
+  }
+
+  /// 마디를 줄이면 뒷부분 음이 **되돌리기 없이 영구히** 사라진다 —
+  /// `_confirmRest` 와 같은 대화상자 모양으로, 무엇이 몇 개 사라지는지 대고 묻는다.
+  void _confirmSceneShrink(int nb, int dropNotes, int dropDrums) {
+    final parts = <String>[
+      if (dropNotes > 0) '음 $dropNotes개',
+      if (dropDrums > 0) '드럼 타격 $dropDrums개',
+    ];
+    final what = parts.join(' · ');
+    showDialog<void>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1D22),
+        title: Text(
+          '씬을 $nb마디로 줄일까요?',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          '$nb마디 밖의 $what 가 사라집니다.\n'
+          '이건 되돌릴 수 없어요.',
+          style: const TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d),
+            child: const Text('취소', style: TextStyle(fontSize: 14)),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(d);
+              _applySceneBars(nb);
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.teal.shade600,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text(
+              '줄이기',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _applySceneBars(int b) {
     final changed = widget.project.setSceneBars(b);
     if (changed == 0) {
       _say('바꿀 판이 없어요 — 이 씬에 들리는 악기가 없습니다.');

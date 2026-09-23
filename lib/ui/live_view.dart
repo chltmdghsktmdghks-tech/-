@@ -186,6 +186,13 @@ class _LiveViewState extends State<LiveView> {
   double _loopSec = 0;
   int _loopBars = 4;
 
+  /// 화면이 사라진 **뒤에도** 안내를 띄우려고 붙잡아 둔 메신저.
+  /// 탭을 바꾸면 이 화면은 통째로 dispose 되지만, 이 메신저를 물고 있는
+  /// Scaffold(workspace)는 그대로 살아 있다 — dispose 이후 프레임에서
+  /// 녹음을 담고 그 결과를 여기로 알린다(`ScaffoldMessenger.of(context)` 를
+  /// dispose 에서 부르면 안 되므로 미리 잡아 둔다 — Flutter 권장 방식).
+  ScaffoldMessengerState? _messenger;
+
   AudioClient? get host => widget.host;
   MusicKey get key =>
       MusicKey(root: widget.transport.root, mode: widget.transport.mode);
@@ -204,10 +211,58 @@ class _LiveViewState extends State<LiveView> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // dispose 때 쓰려고 미리 잡아 둔다(그 자리에서 of(context) 호출은 금지).
+    _messenger = ScaffoldMessenger.of(context);
+  }
+
+  @override
   void dispose() {
     _metTimer?.cancel();
     // 잡고 있던 것을 놓고 나간다 — 안 놓으면 화면을 나가도 소리가 계속 난다.
     host?.holdOff(-1);
+    // **탭 전환으로 통째로 사라져도 담은 음을 잃지 않는다.**
+    //
+    // 상단 탭 줄에서 「씬」을 누르면 workspace 가 이 화면을 그대로 dispose 한다 —
+    // PopScope 는 Navigator.pop 경로만 잡아서 여기엔 반응하지 않는다. 그러면
+    // 「담기 N」이던 녹음이 말없이 사라졌다. 뒤로가기(PopScope)는 이미 `_toggleRec`
+    // 으로 담고 나가므로 그 경우엔 `_rec` 이 이미 null 이라 여기 안 걸린다.
+    //
+    // dispose 안에서 바로 담으면 안 된다 — `_keep` 이 `putUserPattern` 으로
+    // `notifyListeners` 를 부르는데, 트리가 잠긴 이 시점에 부르면 「tree was locked」
+    // 로 터진다(build 주석과 같은 이유). 그래서 **다음 프레임**(트리가 풀린 뒤)에
+    // 담는다. project·host·transport 는 workspace 가 계속 쥐고 있어 살아 있다.
+    final rec = _rec;
+    if (rec != null) {
+      final notes = rec.notes();
+      if (notes.isNotEmpty) {
+        _rec = null;
+        final messenger = _messenger;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _keep(notes); // 안의 `_say` 는 이미 unmounted 라 조용히 넘어간다
+          // 스낵바는 **띄울 Scaffold 가 살아 있을 때만.** 탭 전환이면 workspace
+          // 의 Scaffold 가 남아 있어 뜨지만, 앱이 통째로 닫히거나(테스트가 이
+          // 경우다) 이 화면이 마지막 화면이었으면 descendant Scaffold 가 없어
+          // `showSnackBar` 가 assert 로 터진다. 담는 것(위 `_keep`)은 이미 끝났으니
+          // 알림만 조용히 건너뛴다 — 알림 하나 때문에 앱을 죽일 순 없다.
+          try {
+            messenger?.showSnackBar(
+              SnackBar(
+                content: Text(
+                  '녹음 중이던 ${notes.length}음을 「라이브」 트랙에 담았습니다',
+                  style: const TextStyle(fontSize: 12.5),
+                ),
+                duration: const Duration(milliseconds: 2200),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          } catch (_) {
+            // 띄울 화면이 없다 — 담기는 이미 됐으니 그냥 넘어간다.
+          }
+        });
+      }
+    }
     _clock.dispose();
     // 나갈 때 다시 곡 모드로 — 다음 화면(곡·씬)은 안 밀리는 쪽이 중요하다
     host?.setSongMode(true);
@@ -452,8 +507,22 @@ class _LiveViewState extends State<LiveView> {
   void _toggleRec() {
     final rec = _rec;
     if (rec == null) {
-      // 안 틀고 녹음하면 박자 기준이 없다 — 반주부터 켠다
-      if (!widget.transport.playing) _togglePlay();
+      // 안 틀고 녹음하면 박자 기준이 없다 — 반주부터 켠다.
+      //
+      // **곡 전체 재생(songLoop) 중이면 씬 한 판 루프로 갈아탄다.** 안 그러면
+      // 아래 `build(reps:1)` 로 잡는 `_loopSec`(씬 한 판 길이)과 실제 엔진이
+      // 도는 루프(곡 전체 길이)가 어긋나, `_clock.pos(_loopSec)` 의 분모가 틀려
+      // 박 위치가 엉뚱하게 적힌다. `_keep` 이 **담을 때** 하던 전환(2026-09-14)을
+      // 여기 **시작 때**도 대칭으로 해 준다 — 무반응 대신 왜 바뀌는지도 알린다.
+      final h = host;
+      if (!widget.transport.playing) {
+        _togglePlay();
+      } else if (widget.transport.songLoop && h != null) {
+        SceneSequencer.playLoop(widget.project, widget.transport, h);
+        widget.transport.songLoop = false;
+        h.setSongMode(false);
+        _say('곡 전체 대신 이 씬을 돌리며 녹음합니다');
+      }
       final b = SceneSequencer.build(widget.project, widget.transport, reps: 1);
       _loopSec = b.loopSec;
       _loopBars = b.loopBars;

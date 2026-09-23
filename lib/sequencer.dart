@@ -547,7 +547,16 @@ class SceneSequencer {
   /// 재생 중에 패턴·음색·조·템포를 바꿨을 때 부른다 → 다음 판부터 새 소리.
   ///
   /// 주의: 템포를 바꾸면 한 판 길이도 바뀌므로 그 다음 판부터 새 길이로 돈다.
-  static SceneBuild refreshLoop(Project p, Transport tr, AudioClient host) {
+  /// [restart] 가 참이면 **재생 위치를 판 머리(0)로 되감는다.** 보통은 거짓 —
+  /// 돌고 있는 박자를 안 건드리고 다음 판부터 새 내용만 반영한다. 되감기가
+  /// 필요한 곳은 두들플레이의 단계 전환뿐이다(악기를 넘길 때 새 악기가 씬
+  /// 처음부터 흐르게).
+  static SceneBuild refreshLoop(
+    Project p,
+    Transport tr,
+    AudioClient host, {
+    bool restart = false,
+  }) {
     final b = build(p, tr, reps: _loopReps(p), afterFill: true);
     host.configureBuses(b.busNames);
     pushMix(p, host);
@@ -555,7 +564,7 @@ class SceneSequencer {
       b.notes,
       b.drums,
       b.totalSec,
-      restart: false,
+      restart: restart,
       unitSec: b.loopSec,
     );
     return b;

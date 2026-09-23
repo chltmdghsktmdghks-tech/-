@@ -187,6 +187,11 @@ class _Finger {
   /// 값은 **다음 연타를 낼 시각**이다.
   DateTime? rollNext;
 
+  /// 이 손가락이 롤로 넘어간 순간을 이미 손끝으로 알렸나 — **상태가 바뀌는
+  /// 순간에만** 한 번 울리기 위한 깃발(계속 울리면 드르륵거려 더 나쁘다,
+  /// `_Drag.blocked`와 같은 원칙 — `editor_view.dart` 참고).
+  bool rolled = false;
+
   _Finger({
     required this.pad,
     required this.downX,
@@ -220,6 +225,16 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   int _stage = 0;
   TapClock? _clockState;
   TapRecorder? _rec;
+
+  /// 칠 순서 — 기본은 [kDoodleStages] 그대로지만, 시작 전 "순서 정하기"
+  /// 화면(`_orderBody`)에서 사용자가 드래그로 바꿀 수 있다(사용자 요청,
+  /// 2026-09-22: "진행순서 변경가능하게"). 전역 상수는 **기본값**으로만 쓰고,
+  /// 이 화면 안의 모든 진행 로직은 이 인스턴스 목록을 본다.
+  final List<DoodleStage> _stages = List.of(kDoodleStages);
+
+  /// 순서를 고르는 중인가 — 참이면 아직 박 세기·녹음이 시작되지 않는다.
+  /// `_tick`이 이 동안은 그냥 아무 일도 안 하고 돌아간다.
+  bool _ordering = true;
 
   bool _reviewing = false;
   bool _allDone = false;
@@ -384,7 +399,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 8분음표(`clickSteps = 2`)라, 화면이 세는 박(`_meter.clicksPerBar` 기준)의
   /// **절반 속도**로만 울렸다. 박자표에서 끌어와야 세는 것과 울리는 것이 같다.
   double get _beatSec => _stepSec * _meter.clickSteps;
-  DoodleStage get _stageDef => kDoodleStages[_stage];
+  DoodleStage get _stageDef => _stages[_stage];
 
   @override
   void initState() {
@@ -491,8 +506,35 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         if (s.aheadFrames > 0) _buffered = s.aheadFrames;
       });
     }
-    _armStage();
+    // **박 세기는 아직 안 시작한다** — 먼저 순서 정하기 화면을 보여 주고,
+    // `_startStages()`가 확정된 뒤에 `_armStage()`를 부른다. 시계(`_timer`)는
+    // 미리 켜 둬도 안전하다 — `_tick()`이 `_ordering` 동안은 그냥 돌아간다.
     _timer = Timer.periodic(const Duration(milliseconds: 30), (_) => _tick());
+  }
+
+  /// 순서 정하기 화면에서 "이 순서로 시작"을 눌렀다 — 이제부터 박이 돈다.
+  void _startStages() {
+    setState(() => _ordering = false);
+    _armStage();
+    // 첫 단계도 **씬 머리에서** 시작한다. 씬 루프는 `initState` 의 `playLoop`
+    // 부터 계속 돌아 왔고, 그동안 사용자가 순서를 고르느라 시간을 썼으니
+    // 지금쯤 루프는 아무 자리에나 가 있다 — 되감지 않으면 첫 악기의 미리
+    // 세기가 씬 중간에서 시작한다. 단계 전환(`_keep`)과 같은 결로 맞춘다.
+    _rewindLoop();
+  }
+
+  /// 씬 루프를 **머리(0)로 되감는다** — 새 악기가 씬 처음부터 흐르고 미리
+  /// 세기도 거기서 시작하게(사용자 신고, 2026-09-23: "악기 넘어갈 때 처음부터
+  /// 흐름이 돌게 만들어야지"). `refreshLoop(restart: true)` 가 방금 확정한 앞
+  /// 악기까지 실은 새 루프를 만들고 **엔진 재생 위치를 0으로** 돌린다
+  /// (`setLoop` 의 restart 경로). `_clock`(화면이 읽는 위치)도 같이 0으로
+  /// 맞춰, 다음 실측(0.25초 간격)이 올 때까지 보간이 옛 위치에서 앞으로
+  /// 흘러 새 `TapClock` 을 엉뚱한 자리에서 깨우지 않게 한다.
+  void _rewindLoop() {
+    final h = widget.host;
+    if (h == null) return;
+    SceneSequencer.refreshLoop(widget.project, widget.transport, h, restart: true);
+    _clock.reset();
   }
 
   @override
@@ -562,7 +604,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
 
   void _tick() {
     final h = widget.host;
-    if (!mounted || h == null || _loopSec <= 0 || _reviewing || _allDone) {
+    if (!mounted ||
+        h == null ||
+        _loopSec <= 0 ||
+        _ordering ||
+        _reviewing ||
+        _allDone) {
       return;
     }
     final pos = _clock.pos(_loopSec);
@@ -653,6 +700,50 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       _pending = _rec?.hits() ?? const [];
       _reviewing = true;
     });
+    // **방금 친 것을 바로 들려준다**(사용자 요청, 2026-09-22: "재생 미리듣기").
+    // 여태는 리뷰 화면에 "5번 쳤어요" 같은 숫자만 뜨고, 「사용하기」를 눌러야만
+    // `_commit()`이 돌아 씬에 얹혔다 — 「다시 녹음 vs 사용하기」를 귀가 아니라
+    // 숫자로 판단해야 했다. `_commit()`은 `_pending`/`_rollSteps`를 **통째로
+    // 다시 쓰는** 함수라(드럼은 `clear()` 뒤 다시 채움, 베이스·코드는 `const []`를
+    // 이전 목록 삼아 새로 지음) 여기서 미리 불러도, 나중에 「사용하기」에서 다시
+    // 불러도 결과가 같다 — 두 번 부르는 것이 안전하다.
+    _commit();
+    final h = widget.host;
+    if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+  }
+
+  /// 이 단계의 판을 **빈 상태로 되돌린다** — 미리듣기로 심어 둔 것을 다시
+  /// 녹음하기 전에 지운다. 드럼은 **이 레인만**(다른 레인은 앞 단계에서 이미
+  /// 확정된 것이니 손대지 않는다), 베이스·코드는 판 전체를 비운다 — `initState`가
+  /// 처음 들어올 때 비우는 것과 같은 모양이다.
+  void _blankStage() {
+    switch (_stageDef.kind) {
+      case DoodleKind.drum:
+        final lane = _stageDef.drumLane!;
+        _ops.steps[lane]?.clear();
+        _ops.vels[lane]?.clear();
+        widget.project.putUserPattern(
+          'drum',
+          _drumPatternName,
+          drum: _ops.toDef(_drumPatternName, _bars),
+        );
+      case DoodleKind.bass:
+        _bassNotes = const [];
+        widget.project.putUserPattern(
+          'bass',
+          _bassPatternName,
+          note: NotePatternDef(_bassPatternName, _bars, _bars, const [],
+              spb: widget.project.spb),
+        );
+      case DoodleKind.chord:
+        _chordNotes = const [];
+        widget.project.putUserPattern(
+          'chord',
+          _chordPatternName,
+          note: NotePatternDef(_chordPatternName, _bars, _bars, const [],
+              spb: widget.project.spb),
+        );
+    }
   }
 
   // ── 두드리기 ── 이 화면은 늘 판 하나("악기 하나")만 활성화한다 — 손가락은 늘 pad 0.
@@ -789,7 +880,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   static const double _kHardR = 0.24;
 
   /// 여기서부터 바깥은 여리게.
-  static const double _kSoftR = 0.44;
+  ///
+  /// **0.44는 너무 좁았다**(사용자 지적, 2026-09-22: "아무 데나 쳐도 됩니다"라고
+  /// 안내하면서 실제로는 안 그랬다). 이 화면은 원이 아니라 위아래로 긴 사각형을
+  /// 치는 자리로 쓰는데, `r`은 **짧은 변**(보통 가로) 기준이라 세로로 조금만
+  /// 벗어나도 r이 금방 0.44를 넘었다 — 예컨대 가로 400·세로 600짜리 화면에서
+  /// 화면 위아래 끝(가운데서 세로로만 300 떨어진 자리)조차 r=0.75로 이미
+  /// "가장자리(고스트)"였다. 화면 대부분이 약하게만 나는데 안내는 "아무 데나"라
+  /// 말이 안 맞았다. 0.85로 넓혀 **실제 모서리에 가까운 곳만** 여리게로 남긴다.
+  static const double _kSoftR = 0.85;
 
   /// **세로 사다리로 음 고르기**(베이스 전용) — 아래가 낮은 음, 위가 높은 음.
   ///
@@ -888,7 +987,24 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       case DoodleKind.chord:
         _chordDown(step, vel, recording: recording, now: now);
     }
+    _hapticForVel(vel);
     setState(() => _hitAt = now);
+  }
+
+  /// 친 세기에 맞는 손끝 되울림(사용자 요청, 2026-09-22: "타격 햅틱 추가") —
+  /// 화면 잔물결(시각) 하나로만 "쳤다"를 확인해야 했다. 리듬을 탈 때는 화면을
+  /// 안 보므로(힌트 문구도 그렇게 적혀 있다) 손끝 신호가 있어야 한다. 롤(연타)
+  /// 도중에는 여기를 안 거친다 — `_tickRoll`이 따로, **상태가 바뀌는 순간에만**
+  /// 한 번 울린다(계속 울리면 드르륵거려 더 나쁘다).
+  void _hapticForVel(int vel) {
+    switch (vel) {
+      case 3:
+        HapticFeedback.heavyImpact();
+      case 2:
+        HapticFeedback.mediumImpact();
+      default:
+        HapticFeedback.lightImpact();
+    }
   }
 
   /// 그 칸 · 그 도수의 베이스 주파수. **들리는 음과 적히는 음이 같아야 하므로**
@@ -1162,6 +1278,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           continue;
         }
         if (delay > _kRollAheadSec) break;
+        // **롤로 넘어간 순간**을 손끝으로 한 번만 알린다(사용자 요청, 2026-09-22:
+        // "타격 햅틱 추가") — 한 방을 친 건지 롤이 도는 건지 HOLD 글자 말고는
+        // 구분할 길이 없었다. `f.rolled`가 상태 깃발이라 이 손가락이 쥐고 있는
+        // 동안 한 번만 울린다(계속 울리면 드르륵거려 더 나쁘다).
+        if (!f.rolled) {
+          f.rolled = true;
+          HapticFeedback.selectionClick();
+        }
         // 첫 한 방보다 살짝 여리게 — 진짜 롤이 그렇다.
         final rv = f.vel > 1 ? f.vel - 1 : 1;
         hits.add([_drumTrack.kit, lane, rv, 180.0, delay]);
@@ -1181,7 +1305,16 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     if (hits.isNotEmpty) h.drumBatch(hits);
   }
 
-  void _retake() => setState(_armStage);
+  void _retake() {
+    // 미리듣기로 씬에 얹어 둔 것을 지운다 — 안 지우면 재녹음하는 동안 앞
+    // 테이크가 라이브 타격 소리와 겹쳐 들린다.
+    _blankStage();
+    setState(_armStage);
+    // 다시 녹음도 **씬 머리에서** 시작한다 — 단계 전환과 같은 결. 안 되감으면
+    // 앞서 확정된 악기들이 씬 중간부터 들리다가 미리 세기가 붙어 자리가 튄다.
+    // `_rewindLoop` 이 `_blankStage` 로 비운 판까지 실어 새 루프를 만든다.
+    _rewindLoop();
+  }
 
   /// **그만하고 나가기.** 이미 「사용하기」로 넘긴 단계는 씬에 남아 있고,
   /// 지금 치던 판만 버려진다 — 그걸 그대로 적어서 알려 준다.
@@ -1201,7 +1334,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         content: Text(
           kept == 0
               ? '아직 아무것도 안 남겼어요. 지금 나가면 이 씬은 그대로입니다.'
-              : '$kept개(${kDoodleStages.take(kept).map((s) => s.label).join(' · ')})는 '
+              : '$kept개(${_stages.take(kept).map((s) => s.label).join(' · ')})는 '
                     '이미 씬에 남았어요.\n지금 치던 ${_stageDef.label}만 버려집니다.',
           style: const TextStyle(color: Colors.white70, height: 1.5),
         ),
@@ -1303,14 +1436,19 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   void _keep() {
     final h = widget.host;
     _commit();
-    if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
-    if (_stage + 1 >= kDoodleStages.length) {
+    if (_stage + 1 >= _stages.length) {
+      // 마지막 단계 — 되감을 필요가 없다(다음 악기가 없다). 확정한 것만 싣는다.
+      if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
       setState(() => _allDone = true);
     } else {
       setState(() {
         _stage++;
         _armStage();
       });
+      // 새 악기가 씬 처음부터 흐르게 루프를 머리로 되감는다 —
+      // `_rewindLoop` 이 방금 확정한 앞 악기까지 실은 새 루프를 만들고(그래서
+      // 여기서 따로 `refreshLoop` 을 부르지 않는다) 재생 위치를 0으로 돌린다.
+      _rewindLoop();
     }
   }
 
@@ -1360,8 +1498,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // 다 끝내기 전에는 **나갈 길이 아예 없었다.** 게다가 이 화면에 있는 동안은
       // 씬의 다른 트랙을 재워 두므로, 갇힌 사람이 앱을 강제 종료하면 `dispose`
       // 의 복구가 안 돌고 자동 저장이 **음소거된 채로** 파일에 쓴다.
-      // 그래서 이제는 묻고 나간다.
-      canPop: _allDone,
+      // 그래서 이제는 묻고 나간다. **순서 정하기 화면은 예외**다 — 아직 아무것도
+      // 안 쳤으니 잃을 것이 없다. 묻지 않고 바로 나가게 둔다.
+      canPop: _allDone || _ordering,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         _confirmExit();
@@ -1369,9 +1508,111 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       child: Scaffold(
         backgroundColor: const Color(0xFF101114),
         body: SafeArea(
-          child: _allDone ? _doneBody() : (_reviewing ? _reviewBody() : _playBody()),
+          child: _ordering
+              ? _orderBody()
+              : (_allDone ? _doneBody() : (_reviewing ? _reviewBody() : _playBody())),
         ),
       ),
+    );
+  }
+
+  /// **순서 정하기** — 5단계를 드래그로 재배열한다(사용자 요청, 2026-09-22:
+  /// "진행순서 변경가능하게"). 박 세기는 아직 안 돈다(`_startStages`가 눌려야
+  /// `_armStage`가 불린다).
+  ///
+  /// 베이스가 코드보다 앞에 와도 **막지는 않는다** — `_prog()`가 이미 들어올 때
+  /// 챙겨 둔 원래 진행(`_priorProg`)으로 자연스럽게 넘어가는 안전장치가 있다
+  /// (`initState`의 `readSceneProg` 주석 참고). 다만 그 경우 베이스가 코드
+  /// 단계에서 새로 정한 화성이 아니라 **원래 화성**을 따라간다는 것은 알려 준다.
+  Widget _orderBody() {
+    final bassIdx = _stages.indexWhere((s) => s.kind == DoodleKind.bass);
+    final chordIdx = _stages.indexWhere((s) => s.kind == DoodleKind.chord);
+    final bassBeforeChord =
+        bassIdx >= 0 && chordIdx >= 0 && bassIdx < chordIdx;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 6, 16, 0),
+          child: Row(
+            children: [
+              IconButton(
+                tooltip: '나가기',
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, color: Colors.white54),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '칠 순서를 정하세요',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                '손잡이를 끌어서 순서를 바꿀 수 있어요. 그대로 시작해도 됩니다.',
+                style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ReorderableListView(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            // `onReorderItem` 은 **이미 보정된** 새 자리를 준다(옛 `onReorder` 는
+            // 빼기 전 기준이라 직접 -1 해야 했다 — song_view.dart와 같은 이유).
+            onReorderItem: (oldIndex, newIndex) {
+              setState(() {
+                final s = _stages.removeAt(oldIndex);
+                _stages.insert(newIndex, s);
+              });
+            },
+            children: [
+              for (var i = 0; i < _stages.length; i++)
+                _OrderRow(key: ValueKey(_stages[i]), stage: _stages[i], index: i),
+            ],
+          ),
+        ),
+        if (bassBeforeChord)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 6),
+            child: Text(
+              '베이스를 코드보다 앞에 두면, 베이스는 지금 씬에 있던 화성을 따라가요 —\n'
+              '나중에 코드에서 새로 친 것과 다를 수 있어요.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.amber.withValues(alpha: 0.85),
+                fontSize: 11.5,
+                height: 1.4,
+              ),
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 12, 24, 28),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: _startStages,
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.tealAccent.shade400,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text(
+                '이 순서로 시작',
+                style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1420,7 +1661,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          for (var i = 0; i < kDoodleStages.length; i++)
+          for (var i = 0; i < _stages.length; i++)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: Column(
@@ -1436,7 +1677,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    kDoodleStages[i].label,
+                    _stages[i].label,
                     style: TextStyle(
                       fontSize: 10.5,
                       fontWeight: i == _stage ? FontWeight.w800 : FontWeight.w500,
@@ -1858,7 +2099,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
               child: Text(
-                _stage + 1 >= kDoodleStages.length ? '사용하기 · 완성' : '사용하기',
+                _stage + 1 >= _stages.length ? '사용하기 · 완성' : '사용하기',
                 style: const TextStyle(
                   color: Colors.black,
                   fontWeight: FontWeight.w800,
@@ -1906,6 +2147,66 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
               child: const Text(
                 '내 곡으로 가기',
                 style: TextStyle(color: Colors.black, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 순서 정하기 화면의 줄 하나. `ReorderableListView`가 기본 손잡이를 그려
+/// 주므로(`buildDefaultDragHandles` 기본값 true) 여기서는 번호·이름만 보여 준다.
+class _OrderRow extends StatelessWidget {
+  final DoodleStage stage;
+  final int index;
+  const _OrderRow({required super.key, required this.stage, required this.index});
+
+  Color get _color => switch (stage.kind) {
+    DoodleKind.drum => Colors.lightGreenAccent,
+    DoodleKind.bass => Colors.lightBlueAccent,
+    DoodleKind.chord => Colors.purpleAccent,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _color.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 28,
+            height: 28,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _color.withValues(alpha: 0.18),
+            ),
+            child: Text(
+              '${index + 1}',
+              style: TextStyle(
+                color: _color,
+                fontWeight: FontWeight.w800,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(
+              stage.label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+                letterSpacing: 1,
               ),
             ),
           ),

@@ -911,6 +911,47 @@ class _BlockBar extends StatelessWidget {
     required this.onDone,
   });
 
+  /// 구간 지우기는 되돌릴 수 없다 — 구간과 여기 얹은 트랙별 클립이 함께 빠진다.
+  /// 무엇을 지우는지 알려주고 한 번 확인받는다(scene_view 의 _confirmRest 관례).
+  void _confirmDelete(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1D22),
+        title: Text(
+          '${index + 1}번 구간을 지울까요?',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: const Text(
+          '이 구간과 여기에 얹은 트랙별 클립이 함께 빠집니다.',
+          style: TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d),
+            child: const Text('취소', style: TextStyle(fontSize: 14)),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(d);
+              song.removeAt(index);
+              onDone();
+              onChanged();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text(
+              '지우기',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -1003,11 +1044,7 @@ class _BlockBar extends StatelessWidget {
                   ),
                   _SmallBtn(
                     icon: Icons.delete_outline,
-                    onTap: () {
-                      song.removeAt(index);
-                      onDone();
-                      onChanged();
-                    },
+                    onTap: () => _confirmDelete(context),
                   ),
                 ],
               ),
@@ -1447,6 +1484,27 @@ class _Timeline extends StatelessWidget {
                 Navigator.pop(ctx);
                 song.removeLane(c);
                 onChanged();
+                // 씬 것으로 되돌린 것뿐이라 가볍다 — 확인창 대신 되돌리기 스낵바로
+                // 붙인다(이 화면의 곡 길이 맞추기 되돌리기와 같은 관례).
+                ScaffoldMessenger.of(context)
+                  ..clearSnackBars()
+                  ..showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        '「${patternLabel(c.pattern)}」 지움 — 씬 것으로 돌아갔습니다',
+                        style: const TextStyle(fontSize: 12.5),
+                      ),
+                      behavior: SnackBarBehavior.floating,
+                      duration: const Duration(seconds: 6),
+                      action: SnackBarAction(
+                        label: '되돌리기',
+                        onPressed: () {
+                          song.putLane(c.section, c.bar, c.trackId, c.pattern);
+                          onChanged();
+                        },
+                      ),
+                    ),
+                  );
               },
             ),
           ],
@@ -2471,16 +2529,56 @@ class _SectionRow extends StatelessWidget {
               ),
             ),
             IconButton(
-              onPressed: () {
-                song.removeAt(index);
-                onChanged();
-              },
+              onPressed: () => _confirmDelete(context),
               iconSize: 18,
               color: Colors.white24,
               icon: const Icon(Icons.close),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// 구간 지우기는 되돌릴 수 없다 — 구간과 여기 얹은 트랙별 클립이 함께 빠진다.
+  /// 무엇을 지우는지(몇 번, 어떤 씬) 알려주고 한 번 확인받는다.
+  void _confirmDelete(BuildContext context) {
+    final name = section.scene >= 0 && section.scene < scenes.length
+        ? scenes[section.scene].name
+        : '(없는 씬)';
+    showDialog<void>(
+      context: context,
+      builder: (d) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1D22),
+        title: Text(
+          '${index + 1}. $name 을 지울까요?',
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
+        ),
+        content: const Text(
+          '이 구간과 여기에 얹은 트랙별 클립이 함께 빠집니다.',
+          style: TextStyle(fontSize: 13, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(d),
+            child: const Text('취소', style: TextStyle(fontSize: 14)),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(d);
+              song.removeAt(index);
+              onChanged();
+            },
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.red.shade700,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text(
+              '지우기',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
       ),
     );
   }

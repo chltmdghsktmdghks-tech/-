@@ -214,8 +214,12 @@ class _HomeViewState extends State<HomeView> {
       context,
       onDone: (ans) async {
         final r = askRecipe(ans, pick: DateTime.now().second);
-        applyAsk(project, transport, ans, r);
         // 새 곡으로 남긴다 — 답해서 만든 것이 지금 곡을 덮으면 그게 제일 나쁘다.
+        // `_doodlePlay` 와 같은 순서다: 먼저 새 빈 곡을 만들어(지금 곡은 저장되고
+        // `project` 는 새 파일을 가리킨다) 그 위에 AI 생성 결과를 얹는다. 이걸
+        // 빼면 `saveNow` 가 지금 열려 있던 곡 파일을 AI 곡으로 소리 없이 덮어썼다.
+        await store?.newSong();
+        applyAsk(project, transport, ans, r);
         await store?.saveNow();
         if (!mounted) return;
         ScaffoldMessenger.of(context)
