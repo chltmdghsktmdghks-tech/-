@@ -12,6 +12,7 @@ import 'package:music_doodle_engine/meter.dart';
 import 'package:music_doodle_engine/patterns.dart';
 import 'package:music_doodle_engine/project.dart';
 import 'package:music_doodle_engine/sequencer.dart';
+import 'package:music_doodle_engine/tap_rec.dart';
 
 void main() {
   group('자(메트로놈)가 씬과 같은 시계를 쓴다', () {
@@ -145,6 +146,137 @@ void main() {
       const bpm = 120.0;
       final stepSec = 60.0 / bpm / 4;
       expect(stepSec * m.clickSteps, closeTo(60.0 / bpm, 1e-9));
+    });
+  });
+
+  // ── 예비박이 정확히 한 마디만 세고, 씬 머리에서 바로 시작하는가 ──
+  // (사용자 신고, 2026-09-22: "예비박이 4박 이상 세진다" /
+  //  "악기 넘어갈 때 씬 처음부터 녹음해야지 왜 4마디를 다 돌고 나서야
+  //  시작되는 거야")
+  group('TapClock — armedAtHead (두들플레이 전용)', () {
+    // 두들플레이의 실제 값과 같은 모양 — 4/4, 4마디 씬을 통째로 녹음.
+    TapClock headClock({bool armedAtHead = true}) => TapClock(
+      beatsPerLoop: 16, // 4마디 × 4박
+      lapBeats: 16, // 판 한 바퀴 = 씬 루프 한 바퀴
+      countBeats: 4, // 한 마디
+      beatsPerBar: 4,
+      armedAtHead: armedAtHead,
+    );
+
+    /// 30ms 화면 시계를 흉내 낸다(120BPM 4분음표 = 0.5초 → 한 틱 0.03박).
+    /// [cs] 가 [until] 을 만족할 때까지 돌리고, 멈춘 자리의 누적 `beatF`를
+    /// 돌려준다. 판을 다 안 돌고 끝나야 하는 시험이라 위쪽 한도를 둔다.
+    double runUntil(TapClock cs, bool Function() until, {int maxTicks = 1000}) {
+      const step = 0.03;
+      var beatF = 0.0;
+      for (var i = 0; i < maxTicks; i++) {
+        beatF += step;
+        cs.update(beatF);
+        if (until()) return beatF;
+      }
+      fail('$maxTicks 틱 안에 끝나지 않았다');
+    }
+
+    test('만들자마자 미리 세기(count)다 — wait 를 안 거친다', () {
+      final cs = headClock();
+      expect(cs.phase, TapPhase.count);
+      expect(cs.left, 4, reason: '정확히 한 마디(4박)를 세야 한다');
+    });
+
+    test('정확히 countBeats(한 마디)만 세고 녹음이 시작된다', () {
+      final cs = headClock();
+      final leftSeen = <int>{};
+      const step = 0.03;
+      var beatF = 0.0;
+      while (cs.phase != TapPhase.rec) {
+        beatF += step;
+        cs.update(beatF);
+        if (cs.phase == TapPhase.count) leftSeen.add(cs.left);
+        expect(beatF, lessThan(8), reason: '판의 절반도 되기 전에 rec 로 가야 한다');
+      }
+      // 4→3→2→1, 그 이상도 이하도 없어야 한다(예비박이 한 마디를 넘어가면 안 된다).
+      expect(leftSeen, {4, 3, 2, 1});
+    });
+
+    test('되감은 직후 바로 시작 — 판을 거의 다 돌 때까지 기다리지 않는다', () {
+      final cs = headClock();
+      // 씬 머리(0)에서 되감아 바로 만든 상태이므로, 녹음(rec)까지 가는 데
+      // 걸리는 시간은 미리 세기 한 마디(4박) 남짓이어야 한다 — 판 전체
+      // (16박)를 거의 다 돌고 나서야 시작되면 안 된다.
+      final at = runUntil(cs, () => cs.phase == TapPhase.rec);
+      expect(at, lessThan(6), reason: '4박 미리 세기 + 여유 정도여야 한다');
+    });
+
+    test('회귀 증거 — armedAtHead 없이(예전 방식) 같은 값을 쓰면 판을 거의 '
+        '다 돌아야 미리 세기가 시작된다', () {
+      // 이 시험은 **고친 코드가 아니라 옛 코드의 증상**을 재현해 둔다 — 왜
+      // `armedAtHead` 가 필요했는지 숫자로 남긴다. `_rewindLoop` 로 이미
+      // 머리(0)로 되감아 둔 상태에서 이 경로(armedAtHead: false)를 타면,
+      // `beatsPerLoop - countBeats`(=12박)에 이를 때까지 대기(wait)가
+      // 안 끝난다 — 그 동안 자(메트로놈)는 계속 울린다(`_sendMet`).
+      final cs = headClock(armedAtHead: false);
+      expect(cs.phase, TapPhase.wait);
+      final at = runUntil(cs, () => cs.phase != TapPhase.wait);
+      expect(at, greaterThan(11),
+          reason: '12박(판 끝에서 한 마디 앞) 근처까지 기다려야 벗어난다 — '
+              '이게 "4마디를 다 돌고 나서야 시작된다"는 신고의 몸통이다');
+    });
+  });
+
+  group('doodleShouldSendMet — 드럼 확정 뒤엔 본 녹음 중 자를 끈다', () {
+    // 사용자 지시(2026-09-22): "하이햇까지 찍은 뒤 코드·베이스 녹음할 때는
+    // 메트로놈을 예비박에만 주고 본 녹음 중엔 꺼라 — 드럼이 이미 박자를 준다".
+    test('미리 세기·대기 동안은 무엇을 녹음하든 늘 울린다', () {
+      for (final phase in [TapPhase.wait, TapPhase.count]) {
+        for (final isDrum in [true, false]) {
+          for (final confirmed in [true, false]) {
+            expect(
+              doodleShouldSendMet(
+                phase: phase,
+                isDrumStage: isDrum,
+                drumsConfirmed: confirmed,
+              ),
+              isTrue,
+              reason: '$phase/$isDrum/$confirmed — 미리 세기·대기는 늘 울려야 한다',
+            );
+          }
+        }
+      }
+    });
+
+    test('드럼을 치는 동안(rec)은 드럼이 확정됐어도 계속 울린다', () {
+      expect(
+        doodleShouldSendMet(
+          phase: TapPhase.rec,
+          isDrumStage: true,
+          drumsConfirmed: true,
+        ),
+        isTrue,
+        reason: '드럼 스스로를 녹음하는 중엔 박자를 줄 것이 자밖에 없다',
+      );
+    });
+
+    test('드럼이 아직 없으면(미확정) 코드·베이스 녹음 중에도 울린다', () {
+      expect(
+        doodleShouldSendMet(
+          phase: TapPhase.rec,
+          isDrumStage: false,
+          drumsConfirmed: false,
+        ),
+        isTrue,
+      );
+    });
+
+    test('드럼이 확정된 뒤 코드·베이스를 녹음하는 동안은 꺼진다', () {
+      expect(
+        doodleShouldSendMet(
+          phase: TapPhase.rec,
+          isDrumStage: false,
+          drumsConfirmed: true,
+        ),
+        isFalse,
+        reason: '드럼이 이미 박자를 주니 자를 겹칠 이유가 없다',
+      );
     });
   });
 

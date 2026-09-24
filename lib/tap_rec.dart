@@ -282,12 +282,36 @@ class TapClock {
   final int countBeats;
   final int beatsPerBar;
 
+  /// 참이면 **만들어지는 순간 이미 씬 머리(0)로 되감아 둔 상태**라는 뜻 —
+  /// `wait` 단계를 건너뛰고 바로 미리 세기(`count`)를 시작한다(두들플레이
+  /// 전용, 사용자 신고 2026-09-22: "예비박이 4박 이상 세진다" /
+  /// "악기 넘어갈 때 씬 처음부터 녹음해야지 왜 4마디를 다 돌고 나서야 되는
+  /// 거야").
+  ///
+  /// 여태 `wait`는 `lapBeats >= beatsPerLoop`(판 한 바퀴를 통째로 녹음)일
+  /// 때 **판 끝에서 countBeats 앞**(`beatsPerLoop - countBeats`)에 이를
+  /// 때까지 기다렸다 — 그래야 미리 세기가 끝나는 자리가 정확히 판 머리(0)에
+  /// 떨어진다는 계산이었다. 그런데 호출부(`doodle_play_view.dart`의
+  /// `_armStage`+`_rewindLoop`)가 이제 TapClock을 만들 때마다 이미 **루프를
+  /// 머리로 되감아 둔다** — 그 상태에서 저 계산을 그대로 쓰면 "머리에서
+  /// 시작"이 아니라 "머리에서 출발해 판을 한 바퀴 거의 다 돈 뒤에야 머리
+  /// 근처에 다시 온다"가 되어 대기가 몇 배로 길어진다. 게다가 `_sendMet`은
+  /// `wait` 동안에도 계속 울리므로(대기가 침묵이면 고장처럼 보여서), 그
+  /// 길어진 대기 내내 자가 울려 "미리 세기가 4박보다 훨씬 길게" 들렸다.
+  /// 이미 머리라는 것을 아는 호출부는 기다릴 이유가 없다 — 바로 센다.
+  final bool armedAtHead;
+
   TapClock({
     required this.beatsPerLoop,
     required this.lapBeats,
     this.countBeats = 4,
     this.beatsPerBar = 4,
-  });
+    this.armedAtHead = false,
+  }) {
+    if (armedAtHead) {
+      phase = TapPhase.count;
+    }
+  }
 
   TapPhase phase = TapPhase.wait;
 
@@ -377,4 +401,23 @@ class TapClock {
     }
     return phase != was;
   }
+}
+
+/// 두들플레이 전용 — **드럼이 이미 확정된 뒤에는 본 녹음 중 자를 끈다**
+/// (사용자 지시, 2026-09-22: "하이햇까지 찍은 뒤 코드·베이스 녹음할 때는
+/// 메트로놈을 예비박에만 주고 본 녹음 중엔 꺼라 — 드럼이 이미 박자를
+/// 준다"). 미리 세기(`count`)·대기(`wait`) 동안은 **무엇을 녹음하든** 늘
+/// 울린다 — 손이 처음 들어가는 자리라 자가 아직 필요하다. 드럼 단계를
+/// 치는 동안(`rec`)도 그대로 둔다 — 드럼이 아직 없으면 박자를 줄 것이
+/// 자밖에 없다.
+///
+/// 화면(`doodle_play_view.dart`)에서 빼낸 이유는 `tap_rec.dart` 머리말과
+/// 같다 — 시간이 흐르는 규칙은 화면 안에 있으면 시험이 못 본다.
+bool doodleShouldSendMet({
+  required TapPhase phase,
+  required bool isDrumStage,
+  required bool drumsConfirmed,
+}) {
+  if (phase != TapPhase.rec) return true;
+  return isDrumStage || !drumsConfirmed;
 }

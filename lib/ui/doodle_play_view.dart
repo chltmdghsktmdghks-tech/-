@@ -446,10 +446,29 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   double get _beatSec => _stepSec * _meter.clickSteps;
   DoodleStage get _stageDef => _stages[_stage];
 
+  /// 드럼(킥·스네어·하이햇) 단계가 **전부** 확정됐는가 — `_sendMet`이 코드·
+  /// 베이스 녹음 중 자를 꺼도 되는지 여기로 잰다. 자유 순서 이동으로
+  /// 드럼 단계가 뒤섞여도 자리가 아니라 **종류**로 찾는다.
+  bool get _drumsConfirmed {
+    for (var i = 0; i < _stages.length; i++) {
+      if (_stages[i].kind == DoodleKind.drum && !_keptStages.contains(i)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   @override
   void initState() {
     super.initState();
     final p = widget.project;
+    // **들어오면서 아직 울리고 있을 수 있는 소리부터 끊는다** (사용자 신고,
+    // 2026-09-22: "가락이 들려 — 두드린 것만 나와야지"). 씬 화면에서 멜로디
+    // 음을 미리 듣던 손가락을 뗀 그 순간 이 화면으로 넘어오면, 그 음은
+    // `holdOff` 로 끈 적이 없어 두들플레이 내내 계속 잡혀 있는다(아래
+    // `dispose`가 나갈 때는 이미 `holdOff(-1)`을 부르는데, **들어올 때는
+    // 안 불렀다** — 짝이 안 맞았다). 아직 트랙을 재우기도 전이라 맨 먼저 한다.
+    widget.host?.holdOff(-1);
     // **코드 판을 비우기 전에** 지금 씬에 걸려 있는 진행을 챙긴다.
     // `readSceneProg` 는 코드 트랙의 **패턴 음들**을 읽어서 진행을 뽑는데,
     // 조금 아래에서 그 패턴을 빈 것으로 갈아 끼우므로 여기서 안 챙기면
@@ -609,6 +628,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       lapBeats: _bars * _meter.clicksPerBar,
       countBeats: _meter.clicksPerBar,
       beatsPerBar: _meter.clicksPerBar,
+      // `_armStage`를 부르는 모든 자리(`_startStages`·`_keep`·`_gotoStage`·
+      // `_retake`)가 반드시 `_rewindLoop()`도 같이 부른다 — 그래서 이 화면의
+      // TapClock은 늘 씬 머리(0)에서 만들어진다. `wait` 단계로 "마디 머리를
+      // 기다리는" 계산을 또 거치면 오히려 판을 한 바퀴 거의 다 돌아야
+      // 시작된다(`tap_rec.dart`의 `armedAtHead` 문서 참고).
+      armedAtHead: true,
     );
     // 녹음 전에도 "지금 몇 번째 칸인가"를 알아야 미리 들려주는 소리가 그
     // 자리 코드에 맞는다 — 그래서 녹음기를 미리 만들어 둔다. 실제 담기는
@@ -700,6 +725,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 4마디 씬이면 길게는 12초다. 그동안 아무 소리도 안 나면 사용자에겐
     // 고장 난 화면이고, 박을 미리 타 볼 수도 없다.
     if (cs.phase == TapPhase.done) return;
+    // 드럼이 이미 확정된 뒤 코드·베이스를 **녹음하는 동안**은 자를 끈다 —
+    // 계산은 `doodleShouldSendMet`(`tap_rec.dart`, 시험이 잰다).
+    if (!doodleShouldSendMet(
+      phase: cs.phase,
+      isDrumStage: _stageDef.kind == DoodleKind.drum,
+      drumsConfirmed: _drumsConfirmed,
+    )) {
+      return;
+    }
     // ── 「씬 재생이랑 박자가 안 맞아」의 몸통 (사용자 신고, 2026-09-21) ──
     //
     // 두 경로가 **서로 다른 시계**로 시각을 쟀다.
