@@ -1010,6 +1010,13 @@ class _PlayHead extends StatelessWidget {
     this.onBars,
   });
 
+  /// ±버튼이 오가는 값 — 1·3·5·6·7 같은 어중간한 마디 수는 없다.
+  static const List<int> _kBarSteps = [2, 4, 8];
+
+  /// 현재 마디 수를 [_kBarSteps] 중 가장 가까운 값으로 갈무리한다.
+  /// `doodle_play_view.dart:_pickBars` 와 같은 규칙(>=8→8, >=4→4, else 2).
+  static int _pickBarStep(int b) => b >= 8 ? 8 : (b >= 4 ? 4 : 2);
+
   @override
   Widget build(BuildContext context) {
     final n = bars < 1 ? 1 : bars;
@@ -1028,6 +1035,11 @@ class _PlayHead extends StatelessWidget {
           // 틀린 박 번호를 보여 줬다(편집기는 커밋 34df84d 에서 같은 것을 고쳤다).
           final cpb = clicksPerBar;
           final beat = ((pos * n * cpb).floor() % cpb) + 1;
+          // ±버튼은 2·4·8 사이만 오간다 — 어중간한 값이면 먼저 가까운 쪽으로
+          // 갈무리한 다음, 거기서 한 칸 옮긴다.
+          final stepIdx = _kBarSteps.indexOf(_pickBarStep(n));
+          final canDecBars = stepIdx > 0;
+          final canIncBars = stepIdx < _kBarSteps.length - 1;
           return Padding(
             padding: const EdgeInsets.fromLTRB(10, 5, 10, 5),
             child: Row(
@@ -1050,13 +1062,17 @@ class _PlayHead extends StatelessWidget {
                 if (!looping && onBars != null) ...[
                   _BarStep(
                     icon: Icons.remove,
-                    tip: '한 마디 줄이기',
-                    onTap: n > 1 ? () => onBars!(n - 1) : null,
+                    tip: '한 판 마디 줄이기 (2·4·8)',
+                    onTap: canDecBars
+                        ? () => onBars!(_kBarSteps[stepIdx - 1])
+                        : null,
                   ),
                   _BarStep(
                     icon: Icons.add,
-                    tip: '한 마디 늘리기',
-                    onTap: n < 8 ? () => onBars!(n + 1) : null,
+                    tip: '한 판 마디 늘리기 (2·4·8)',
+                    onTap: canIncBars
+                        ? () => onBars!(_kBarSteps[stepIdx + 1])
+                        : null,
                   ),
                   const SizedBox(width: 4),
                 ],
