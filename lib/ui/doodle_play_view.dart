@@ -319,6 +319,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 방금 친 순간(화면 이펙트용) — null 이면 안 친 상태.
   DateTime? _hitAt;
 
+  /// 방금 친 세기(1~3) — 탭 물결(`_hitRipples`)의 크기·진하기를 여기에 맞춘다.
+  /// 세게 칠수록 물결이 크고 진하게 퍼진다(사용자 지시, 이번 배치: "친
+  /// 세기에 따라 물결 크기·진하기가 다르게").
+  int _hitVel = 2;
+
+  /// 사다리 칸별 **마지막으로 지나온 시각** — 베이스에서 미끄러뜨릴 때
+  /// (`_slideTo`) 남기는 궤적이다. [_kLadderTrailMs] 안이면 그 칸이 잠깐
+  /// 밝아진다(지나온 흔적, 시각만 — 판정과 무관).
+  final Map<int, DateTime> _rowVisitAt = {};
+
+  /// 리뷰 화면(`_reviewBody`) 전용 깜빡임 재생기 — `_tick`은 `_reviewing`
+  /// 동안 아무 일도 안 하고 돌아가므로(위 `_tick` 참고), "지금 들려주는 중"
+  /// 표시 하나만을 위해 아주 가볍게 따로 돌린다. 리뷰가 끝나면 바로 멈춘다.
+  Timer? _reviewBlink;
+
   /// HOLD 로 잡고 있는 손가락 번호의 **시작값**. 손가락마다 +1 해서 쓴다
   /// (라이브 화면과 겹치지 않게 큰 수로 둔다).
   static const int _kHoldId = 9001;
@@ -570,6 +585,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   @override
   void dispose() {
     _timer?.cancel();
+    _reviewBlink?.cancel();
     _statsSub?.cancel();
     _clock.dispose();
     final h = widget.host;
@@ -587,6 +603,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   }
 
   void _armStage() {
+    _stopReviewBlink(); // 리뷰를 나가는 모든 길이 여기를 지난다.
     _clockState = TapClock(
       beatsPerLoop: _loopBars * _meter.clicksPerBar,
       lapBeats: _bars * _meter.clicksPerBar,
@@ -629,6 +646,22 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 박 번호가 남아 새 단계의 미리 세기 첫 박이 막힐 수 있다.
     _metSent.clear();
     _metLastNow = 0;
+  }
+
+  /// 리뷰 화면의 "지금 들려주는 중" 표시를 깜빡이게 한다. `_tick`(30ms)은
+  /// `_reviewing` 동안 그냥 돌아가기만 하고 `setState`를 안 부르므로(위
+  /// `_tick` 참고), 이 표시 하나만을 위해 따로 아주 가벼운 시계를 켠다 —
+  /// 400ms면 깜빡임을 느끼기에 충분하고 부담도 없다.
+  void _startReviewBlink() {
+    _reviewBlink?.cancel();
+    _reviewBlink = Timer.periodic(const Duration(milliseconds: 400), (_) {
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _stopReviewBlink() {
+    _reviewBlink?.cancel();
+    _reviewBlink = null;
   }
 
   // ── 박 세기 ── (두드려 넣기 화면과 같은 계산, `tap_sheet.dart` 참고)
@@ -741,6 +774,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _commit();
     final h = widget.host;
     if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+    // 리뷰 화면 진입 — "지금 들려주는 중" 표시를 깜빡이기 시작한다.
+    _startReviewBlink();
   }
 
   /// 이 단계의 판을 **빈 상태로 되돌린다** — 미리듣기로 심어 둔 것을 다시
@@ -978,6 +1013,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 구역 경계에서 이만큼 더 나가야 넘어간 것으로 본다.
   static const double _kZoneSlop = 8;
 
+  /// 사다리에서 **지나온 칸이 밝게 남는 시간**(ms) — 미끄러뜨리기(`_slideTo`)
+  /// 궤적을 보여 준다. `_kHitFx`(320ms)보다 살짝 짧게 둬 너무 오래 안 끈다.
+  static const int _kLadderTrailMs = 260;
+
   /// 손가락이 닿았다 — **누른 동안 계속 나는 소리**로 낸다(HOLD).
   /// 드럼만 예외로 톡 치는 한 방이다(타악은 잡고 있을 것이 없다).
   void _pressDown(PointerDownEvent e, Size area) {
@@ -1024,6 +1063,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       step: step,
     );
     _fingers[pointer] = f;
+    if (_hasTone) _rowVisitAt[zone] = now; // 사다리 궤적 — 첫 자리도 한 번 밝힌다.
     if (recording) {
       rec?.down(pad, pos);
       _velOf[step] = vel;
@@ -1047,7 +1087,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         _chordDown(step, vel, recording: recording, now: now);
     }
     _hapticForVel(vel);
-    setState(() => _hitAt = now);
+    setState(() {
+      _hitAt = now;
+      _hitVel = vel;
+    });
   }
 
   /// 친 세기에 맞는 손끝 되울림(사용자 요청, 2026-09-22: "타격 햅틱 추가") —
@@ -1255,6 +1298,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 판에는 다섯째 칸에 1 을 적는다. 재생 쪽(`buildRowsPattern` 의 `n[4]==1`)이
   /// 같은 방식으로 앞 음에서 미끄러뜨리므로 **친 소리와 재생이 일치한다.**
   void _slideTo(_Finger f, int zone) {
+    // 지나온 칸을 남긴다(시각 궤적만 — 소리·판정과 무관) — `_toneLadder`가
+    // `_kLadderTrailMs` 동안 이 칸을 잠깐 밝힌다.
+    _rowVisitAt[zone] = DateTime.now();
     final cs = _clockState;
     final recording = cs != null && cs.phase == TapPhase.rec;
     final pos = _clock.pos(_loopSec);
@@ -1578,6 +1624,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // 뒤섞여도 이걸로 "완성"을 잰다(자리 기준이 아니라 개수 기준).
       // 되감을 필요가 없다(다음 악기로 넘어가는 게 아니다). 확정한 것만 싣는다.
       if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+      _stopReviewBlink(); // 완성 화면으로 가니 리뷰의 깜빡임은 그만.
       setState(() => _allDone = true);
       return;
     }
@@ -1675,6 +1722,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final chordIdx = _stages.indexWhere((s) => s.kind == DoodleKind.chord);
     final bassBeforeChord =
         bassIdx >= 0 && chordIdx >= 0 && bassIdx < chordIdx;
+    // **추천 상태** — 코드가 베이스보다 앞이면(기본 순서 그대로) 베이스가
+    // 방금 친 화성을 따라간다(맨 위 `kDoodleStages` 주석 참고). 굳이 안
+    // 바꿔도 된다는 것을 "추천" 배지로 알려 준다(이번 배치, B6).
+    final chordRecommended =
+        bassIdx >= 0 && chordIdx >= 0 && chordIdx < bassIdx;
     return Column(
       children: [
         Padding(
@@ -1723,7 +1775,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
             },
             children: [
               for (var i = 0; i < _stages.length; i++)
-                _OrderRow(key: ValueKey(_stages[i]), stage: _stages[i], index: i),
+                _OrderRow(
+                  key: ValueKey(_stages[i]),
+                  stage: _stages[i],
+                  index: i,
+                  recommended:
+                      chordRecommended && _stages[i].kind == DoodleKind.chord,
+                ),
             ],
           ),
         ),
@@ -1877,24 +1935,55 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 친 순간 퍼지는 물결. 시계가 이미 30ms마다 `setState` 를 부르므로
   /// (`_tick`) 따로 애니메이션 장치를 두지 않는다 — 친 시각과 지금의 차로
   /// 그때그때 크기·진하기를 셈한다.
+  ///
+  /// **세기(1~3)에 따라 물결 크기·진하기가 다르다** — 세게 칠수록 크고
+  /// 진한 물결이 퍼진다(사용자 지시, 이번 배치: "친 세기에 따라 물결 크기가
+  /// 다르게"). 단계 색(`_stageColor`)은 그대로 쓴다.
   List<Widget> _hitRipples(double d) {
     final at = _hitAt;
     if (at == null) return const [];
     final ms = DateTime.now().difference(at).inMilliseconds;
     if (ms > _kHitFx.inMilliseconds) return const [];
     final t = ms / _kHitFx.inMilliseconds; // 0 → 1
+    final vel = _hitVel.clamp(1, 3);
+    final growth = 26.0 + 16.0 * vel; // vel1=42, vel2=58, vel3=74
+    final alpha = 0.34 + 0.13 * vel; // vel1=0.47, vel2=0.60, vel3=0.73
     return [
       Container(
-        width: d + 40 * t,
-        height: d + 40 * t,
+        width: d + growth * t,
+        height: d + growth * t,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           border: Border.all(
-            color: _stageColor().withValues(alpha: 0.55 * (1 - t)),
-            width: 3,
+            color: _stageColor().withValues(alpha: alpha * (1 - t)),
+            width: 2 + vel * 0.6,
           ),
         ),
       ),
+    ];
+  }
+
+  /// **코드 두께 동심원** — 지금 몇 겹(3/7/9화음, `_chordFingers`)인지 패드
+  /// 둘레에 동심원 겹으로 보여 준다. 손가락이 늘수록 원이 한 겹씩 바깥으로
+  /// 확장된다(제스처 이펙트 겸 힌트, 이번 배치). 코드 단계에서 **잡고
+  /// 있는 동안만** 보인다 — 놓으면 `_chordFingers`가 다음 화음을 기다리는
+  /// 값으로 남아 있어도(재설정 없음) `_pressed`가 꺼지므로 같이 사라진다.
+  List<Widget> _chordRings(double d) {
+    if (_stageDef.kind != DoodleKind.chord || !_pressed) return const [];
+    final thick = _chordFingers.clamp(1, 3);
+    return [
+      for (var i = 1; i <= thick; i++)
+        Container(
+          width: d + i * 22,
+          height: d + i * 22,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: _stageColor().withValues(alpha: 0.30 - i * 0.06),
+              width: 1.5,
+            ),
+          ),
+        ),
     ];
   }
 
@@ -2135,14 +2224,22 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final d = m * _kHardR * 2;
     final charge = _rollChargeProgress();
     final flashing = _rollFlashing();
+    // 코드 화음을 잡고 있는 동안 = **홀드 글로우**(사용자 지시, 이번 배치:
+    // "잡고 있는 동안 계속, 떼면 사라지게"). 드럼은 톡 치는 악기라 길게
+    // 잡을 일이 없어 여기선 안 켠다(`_hasTone`인 베이스는 사다리가 대신
+    // 맡는다 — 아래 `_toneLadder`).
+    final holdGlow = _stageDef.kind == DoodleKind.chord && _pressed;
+    // 코드 두께 동심원 — 바깥으로 원이 더 커질 수 있으니 상자도 넉넉히 둔다.
+    final ringExtra = _stageDef.kind == DoodleKind.chord ? 3 * 22.0 : 0.0;
     return IgnorePointer(
       child: SizedBox(
-        width: d + 16,
-        height: d + 16,
+        width: d + 16 + ringExtra,
+        height: d + 16 + ringExtra,
         child: Stack(
           alignment: Alignment.center,
           children: [
             ..._hitRipples(d),
+            ..._chordRings(d),
             // 롤 예고 링 — 꾹 누르는 동안 220ms에 걸쳐 차오른다. 롤이 실제로
             // 돌기 시작하면(`f.rolled`) 사라진다 — 그 뒤는 `flashing` 깜빡임이
             // "돌고 있다"를 대신 알린다.
@@ -2179,6 +2276,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                       : Colors.white24,
                   width: flashing ? 4 : 3,
                 ),
+                boxShadow: holdGlow
+                    ? [
+                        BoxShadow(
+                          color: _stageColor().withValues(alpha: 0.45),
+                          blurRadius: 22,
+                          spreadRadius: 1,
+                        ),
+                      ]
+                    : null,
               ),
               child: Center(
                 child: Text(
@@ -2208,6 +2314,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 눈으로 어디를 잡고 있는지 알 수 있어야 미끄러뜨리기도 손에 붙는다.
   Widget _toneLadder() {
     final live = {for (final f in _fingers.values) if (!f.swiped) f.zone};
+    // **홀드 글로우 — 숨 쉬듯 은은하게.** 잡고 있는 칸은 계속 밝지만, 고정된
+    // 값이면 "지금도 잡고 있다"가 죽은 장식처럼 보인다. 그래서 시각에 따라
+    // 살짝 오르내리는 밝기를 쓴다(판정과 무관 — 화면 표시만).
+    final now = DateTime.now();
+    final pulse = 0.5 + 0.5 * math.sin(now.millisecondsSinceEpoch / 260);
+    final glowAlpha = 0.20 + 0.10 * pulse; // 0.20~0.30
     return Stack(
       children: [
         Column(
@@ -2220,7 +2332,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                   padding: const EdgeInsets.only(left: 14),
                   decoration: BoxDecoration(
                     color: _stageColor().withValues(
-                      alpha: live.contains(i) ? 0.20 : (i.isEven ? 0.045 : 0.020),
+                      alpha: live.contains(i) ? glowAlpha : (i.isEven ? 0.045 : 0.020),
                     ),
                     border: Border(
                       top: BorderSide(
@@ -2228,6 +2340,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                           alpha: i == _kLadderRows - 1 ? 0 : 0.05,
                         ),
                       ),
+                      // 잡고 있는 칸만 왼쪽에 밝은 결을 세워 "빛"이 나는
+                      // 자리를 더 또렷이 보여 준다.
+                      left: live.contains(i)
+                          ? BorderSide(color: _stageColor(), width: 3)
+                          : BorderSide.none,
                     ),
                   ),
                   child: Text(
@@ -2241,6 +2358,35 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                 ),
               ),
           ],
+        ),
+        // **슬라이드 궤적** — 미끄러뜨리며 지나온 칸이 잠깐 밝아진다
+        // (`_slideTo`가 `_rowVisitAt`에 시각을 남긴다). 지금 잡고 있는 칸
+        // (`live`)은 위에서 이미 켜 뒀으니 겹쳐 이중으로 밝아지지 않게 뺀다.
+        // 손끝 판정과 무관한 순수 오버레이라 `IgnorePointer`로 올린다.
+        IgnorePointer(
+          child: Column(
+            children: [
+              for (var i = _kLadderRows - 1; i >= 0; i--)
+                Expanded(
+                  child: Builder(
+                    builder: (_) {
+                      if (live.contains(i)) return const SizedBox.expand();
+                      final at = _rowVisitAt[i];
+                      if (at == null) return const SizedBox.expand();
+                      final ms = now.difference(at).inMilliseconds;
+                      if (ms < 0 || ms > _kLadderTrailMs) {
+                        return const SizedBox.expand();
+                      }
+                      final t = ms / _kLadderTrailMs; // 0 → 1
+                      return Container(
+                        width: double.infinity,
+                        color: _stageColor().withValues(alpha: 0.22 * (1 - t)),
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
         ),
         // **가로 = 세기**(사용자 지시, 2026-09-24: "가로축 세기") — 오른쪽으로
         // 갈수록 밝아지는 옅은 결을 깔아, 눈으로도 "오른쪽이 세다"를 알 수
@@ -2285,6 +2431,33 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     );
   }
 
+  /// **"지금 들려주는 중" 표시** — 리뷰 화면은 녹음이 끝나자마자 이미 씬에
+  /// 얹혀 미리듣기 소리가 나는데(`_finishLap`의 `_commit()` + `refreshLoop`),
+  /// 그 사실을 알려 주는 표시가 없었다(이번 배치, B5). 작은 스피커 아이콘이
+  /// `_reviewBlink`(400ms 시계)에 맞춰 깜빡인다.
+  Widget _nowPlayingBadge() {
+    final on = DateTime.now().millisecondsSinceEpoch ~/ 400 % 2 == 0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          Icons.volume_up,
+          size: 15,
+          color: (on ? _stageColor() : _stageColor().withValues(alpha: 0.35)),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          '지금 들려주는 중',
+          style: TextStyle(
+            color: on ? Colors.white54 : Colors.white24,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _reviewBody() {
     return Column(
       children: [
@@ -2304,6 +2477,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           _playedText(),
           style: const TextStyle(color: Colors.white54, fontSize: 14),
         ),
+        const SizedBox(height: 14),
+        _nowPlayingBadge(),
         const Spacer(),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -2417,7 +2592,17 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
 class _OrderRow extends StatelessWidget {
   final DoodleStage stage;
   final int index;
-  const _OrderRow({required super.key, required this.stage, required this.index});
+
+  /// 이 단계가 지금 자리에서 "추천" 순서인가 — 코드가 베이스보다 앞이면 베이스가
+  /// 그 화성을 따라 걸을 수 있어(코드 단계에 추천 배지를 단다). 순서를 굳이
+  /// 안 바꿔도 되는 이유를 사용자에게 보여 준다.
+  final bool recommended;
+  const _OrderRow({
+    required super.key,
+    required this.stage,
+    required this.index,
+    this.recommended = false,
+  });
 
   Color get _color => switch (stage.kind) {
     DoodleKind.drum => Colors.lightGreenAccent,
@@ -2466,6 +2651,23 @@ class _OrderRow extends StatelessWidget {
               ),
             ),
           ),
+          if (recommended)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.tealAccent.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.tealAccent.withValues(alpha: 0.5)),
+              ),
+              child: const Text(
+                '추천',
+                style: TextStyle(
+                  color: Colors.tealAccent,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
         ],
       ),
     );
