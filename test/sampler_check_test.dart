@@ -477,4 +477,62 @@ void main() {
     print(fail == 0 ? '표본 일렉 피아노 확인 통과' : '실패 $fail건');
     expect(fail, 0);
   });
+
+  // J-Bass(2026-09-28 추가) — fingerbass·첼로와 같은 이유(세기 한 벌)로
+  // 최소만 본다. 일반 표본 검증에 더해, **B0(5현 최저현, 30.9Hz)가 별도
+  // 표본 없이 E1 표본을 피치 시프트해 채우는지**(사용자 확정 결정)도 확인한다
+  // — `SampleBank.pick` 이 로그스케일 최근접이라 E1(41.2Hz, 4자리 중 최저)이
+  // 자동으로 뽑혀야 한다.
+  test('악기 품질 1단계 — 표본 J-Bass(기본팩)', () {
+    var fail = 0;
+    void check(String name, bool ok, String detail) {
+      // ignore: avoid_print
+      print('${ok ? '  OK' : '  X '} $name — $detail');
+      if (!ok) fail++;
+    }
+
+    check(
+      '0) 자산을 실제로 읽었다',
+      kSampleBanks.containsKey('jbass'),
+      kSampleBanks.containsKey('jbass')
+          ? 'J-Bass ${kSampleBanks['jbass']!.byVel[2]!.length}개(세기2)'
+          : '표본이 비어 있음(자산 경로·형식 확인)',
+    );
+    if (!kSampleBanks.containsKey('jbass')) {
+      // ignore: avoid_print
+      print('실패 $fail건(자산을 못 읽어 나머지는 의미가 없다)');
+      expect(fail, 0);
+      return;
+    }
+
+    // root 가 아닌 낮은 음(F#1, root E1/A1 사이)도 그 높이로 난다
+    final fs1 = _render('jbass', 46.25, 1.0, 2);
+    final hz = _fundamentalHz(fs1, 46.25);
+    check(
+      '1) 피치 시프트가 맞다(F#1, 저음)',
+      (hz - 46.25).abs() < 46.25 * 0.03,
+      '요청 46.25Hz · 잰 값 ${hz.toStringAsFixed(1)}Hz',
+    );
+
+    // B0(5현 최저현, 30.9Hz) — 별도 표본이 없으니 최저 root(E1, 41.2Hz)를
+    // 골라 그 자리에서 아래로 피치 시프트해야 한다.
+    final bank = kSampleBanks['jbass']!;
+    final picked = bank.pick(2, 30.87);
+    check(
+      '2) B0 요청 시 E1 표본을 고른다(피치 시프트로 커버)',
+      picked.rootFreq == 41.20,
+      '고른 root ${picked.rootFreq}Hz',
+    );
+    final b0 = _render('jbass', 30.87, 1.0, 2);
+    final b0Hz = _fundamentalHz(b0, 30.87, n: 6000);
+    check(
+      '3) B0 도 실제로 그 높이로 난다',
+      (b0Hz - 30.87).abs() < 30.87 * 0.05,
+      '요청 30.87Hz · 잰 값 ${b0Hz.toStringAsFixed(1)}Hz',
+    );
+
+    // ignore: avoid_print
+    print(fail == 0 ? '표본 J-Bass 확인 통과' : '실패 $fail건');
+    expect(fail, 0);
+  });
 }

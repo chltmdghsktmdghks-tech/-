@@ -31,6 +31,7 @@ double _db(double v) => v <= 1e-9 ? -120 : 20 * math.log(v) / math.ln10;
 const Map<String, double> _testFreq = {
   'upright': 65.41, // C2
   'fingerbass': 65.41,
+  'jbass': 65.41,
   'cello': 130.81, // C3
   'piano': 261.63, // C4
   'epiano': 261.63,

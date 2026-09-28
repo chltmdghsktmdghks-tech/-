@@ -92,6 +92,7 @@ flutter:
     - assets/samples/cello/
     - assets/samples/guitar/
     - assets/samples/fingerbass/
+    - assets/samples/jbass/
     - assets/samples/drum_kick/
     - assets/samples/drum_snare/
     - assets/samples/drum_hatClosed/

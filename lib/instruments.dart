@@ -211,6 +211,17 @@ const Map<String, Inst> INSTRUMENTS = {
     holdB: 0.08,
     uni: 5,
   ),
+  // 표본이 로드되기 전(첫 음)에만 쓰는 대체음 — fingerbass 와 같은 계열
+  // (손가락으로 뜯는 일렉 베이스)이라 그 값을 그대로 옮겨 왔다.
+  'jbass': Inst(
+    wave: 'triangle',
+    cut: 700,
+    peak: 0.78,
+    rel: 0.16,
+    holdA: 0.04,
+    holdB: 0.08,
+    uni: 5,
+  ),
 
   // ── 빈티지 아날로그 신스 ──
   'moogbass': Inst(
@@ -381,6 +392,7 @@ const Map<String, double> SUSLV = {
   'moogleadv': 0.78,
   'bass': 0.76,
   'fingerbass': 0.60,
+  'jbass': 0.60,
   'moogbass': 0.72,
   'wobble': 0.86,
   'chip': 0.90,
@@ -440,7 +452,7 @@ const Map<String, List<double>> ATK = {
   'harp': [0.004, 0.35], 'pluck': [0.002, 0.4],
   'marimba': [0.0015, 0.45], 'bell': [0.0012, 0.35],
   // ── 베이스 ── 손가락으로 뜯으니 기타 피크보다 확연히 느리다
-  'upright': [0.011, 0.5], 'fingerbass': [0.009, 0.5],
+  'upright': [0.011, 0.5], 'fingerbass': [0.009, 0.5], 'jbass': [0.009, 0.5],
   'bass': [0.006, 0.35], 'moogbass': [0.005, 0.3],
   // ── 활·입김 ── 여기가 신스 티가 제일 많이 나던 자리
   'violin': [0.055, 0.5], 'cello': [0.070, 0.5],
@@ -668,6 +680,7 @@ const Map<String, Space> SPACE = {
   'drum': Space(0, 0.044, 0),
   'bass': Space(0, 0.022, 0.08),
   'fingerbass': Space(0, 0.028, 0.10),
+  'jbass': Space(0, 0.028, 0.10),
   'moogbass': Space(0, 0.017, 0.06),
   'upright': Space(-0.05, 0.088, 0.12),
   'piano': Space(-0.10, 0.11, 0.42),
@@ -728,6 +741,7 @@ const Map<String, List<double>> VIB = {
 const Map<String, bool> BASS_VOICE = {
   'bass': true,
   'fingerbass': true,
+  'jbass': true,
   'moogbass': true,
   'upright': true,
   'sine': true,

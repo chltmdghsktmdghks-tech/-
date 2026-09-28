@@ -285,6 +285,24 @@ const Map<String, (String, Map<String, double>)> _kSampleSets = {
       'C7': 2093.00,
     },
   ),
+  // bk! New JBass(라이선스: NEEDS VERIFICATION — 사용자 개인 구매/녹음
+  // 표본, 출처 확인 안 됨. `assets/samples/jbass/SOURCE.md` 참고)로 추가 —
+  // 일렉 베이스(핑거베이스와 다른 톤, J-Bass 픽업)를 늘린다. **세기 한
+  // 벌뿐**이라(뮤트 안 된 일반 연주 4개, 재어택 없는 38~39초 자연감쇄)
+  // pp·mf·ff 세 파일이 다 같은 녹음이다 — `kRealVelSamples` 에 안 넣는다
+  // (음량만 `VG` 표로 갈린다, 기타·업라이트와 같은 처리).
+  // 자리는 5현 베이스의 4현만(E1·A1·D2·G2, 단3도~장2도 간격) — 최저현
+  // B0(30.9Hz)는 별도 표본 없이 E1(41.2Hz)에서 `pick()`(로그스케일 최근접)이
+  // 자동으로 피치 시프트해 채운다.
+  'jbass': (
+    'JBass',
+    {
+      'E1': 41.20,
+      'A1': 55.00,
+      'D2': 73.42,
+      'G2': 98.00,
+    },
+  ),
 };
 const Map<String, int> _kVelName = {'pp': 1, 'mf': 2, 'ff': 3};
 
@@ -300,6 +318,7 @@ const Map<String, double> kSamplePan = {
   'cello': -0.4,
   'guitar': 0.2,
   'fingerbass': 0.0, // 베이스는 가운데 — 좌우로 치우치면 저음 무게감이 갈린다
+  'jbass': 0.0, // 마찬가지로 베이스 — 가운데
   'upright': 0.0, // 마찬가지로 베이스 — 가운데
   'sax': -0.25,
   'epiano': 0.1,
@@ -345,6 +364,7 @@ const Map<String, double> kSampleTrim = {
   'epiano': 0.47,
   'fingerbass': 0.50,
   'sax': 0.43, // 혼자 너무 컸다
+  'jbass': 0.79, // 2026-09-28 실측: 원본 피크가 -4.0dB로 혼자 튀어서 내림
 };
 
 /// **녹음 자체에 세기가 들어 있는 악기** — pp/mf/ff 가 정말 다른 녹음이다.

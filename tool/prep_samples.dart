@@ -92,6 +92,7 @@ void main() {
   const maxSecOverride = {
     'guitar': 3.0,
     'fingerbass': 3.0,
+    'jbass': 3.0,
     // 드럼 — 대부분 자연 감쇄가 1초 안에 거의 끝난다(닫힌 하이햇은 훨씬
     // 빠르다). 크래시·라이드만 울림이 길어서 더 준다.
     'drum_kick': 1.0,

@@ -20,6 +20,7 @@ import 'package:music_doodle_engine/synth.dart';
 const Map<String, double> _testFreq = {
   'upright': 65.41,
   'fingerbass': 65.41,
+  'jbass': 65.41,
   'cello': 130.81,
   'piano': 261.63,
   'epiano': 261.63,

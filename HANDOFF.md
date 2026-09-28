@@ -12002,3 +12002,88 @@ design 담당이 진단: 표면 회색 8종 드리프트, **트랙색 두 벌 �
   없이 만족시키려는 선택이었다 — 이미 이 화면 전체가 지켜온 원칙("친 소리 = 적힌 음")과
   같은 결이라 그쪽에 맞췄다. 매끄러운 진행이 아쉬우면(예: 4마디 넘는 긴 코드 진행을 두들로
   찍을 때) 다음에 볼 것.
+
+## 2026-09-28 — 새 표본 악기: bk! New JBass(J-Bass 일렉 베이스)
+
+### 요청/이유
+사용자가 개인 녹음 표본(`~/Downloads/bk!'s_new_jbass/`)을 샘플러에 새 악기로 넣어 달라고
+했다 — fingerbass(핑거 베이스)와 톤이 다른 J-Bass 픽업 베이스를 늘리는 것. 이번 범위는
+**샘플 변환·등록·로딩까지**만 — 두들 연주 연결·악기 선택 UI(`kInstrumentPicks` 등)는
+다음에 editor-ui/design 쪽에서 잇는다.
+
+### 넣은 표본
+원본은 일반(언뮤트) 연주 4개(`E1_01-02.wav`·`A1_01-03.wav`·`D1_01-03.wav`·
+`G1_01-03.wav`, 1채널·48kHz·24비트, 38~39초 자연감쇄)만 썼다 — 뮤트(M) 파일 4개는
+안 씀. **원본 폴더는 읽기만 했다**(타임스탬프 2023-12-17 그대로, 파일 8개 그대로 —
+수정·이동·삭제 없음).
+
+변환: `afconvert -f WAVE -d LEI16`로 24비트→16비트 모노로 낮춘 뒤(48kHz는 그대로 —
+`synth.dart`의 `_smRatio`가 재생 시 클립별 샘플레이트 차이를 보정하므로 리샘플 불필요),
+pp/mf/ff 세 벌로 복제해 `assets/samples/jbass/JBass.<vel>.<root>.raw.wav`에 두고
+`tool/prep_samples.dart`(`maxSecOverride` `jbass: 3.0` 추가, fingerbass/guitar와 같은
+기준)로 3초 트림 + 끝 150ms 페이드 → 최종 `.wav` 12개(4 root × 3 vel), `.raw.wav`는
+지움(다른 악기 폴더와 같은 관례).
+
+root 등록(`lib/sampler.dart` `_kSampleSets['jbass']`): **파일명이 실제 음정과 다른 3개를
+바로잡아서** 등록했다(사용자 실측) — `D1_01-03.wav`→**D2**(73.42Hz), `G1_01-03.wav`→
+**G2**(98.00Hz). `E1`(41.20Hz)·`A1`(55.00Hz)은 파일명과 일치.
+
+### 단일 벨로시티 처리
+4개 다 **세기 한 벌뿐**이라(재어택 없는 자연감쇄 하나) pp/mf/ff 세 파일이 전부 같은
+녹음이다 — `kRealVelSamples`에 안 넣었다(기타·업라이트·일렉피아노 절반처럼 세기 층이
+사실 같은 파일인 악기와 같은 처리). 음량만 기존 `VG`(1:0.30/2:0.60/3:1.0) 표로 갈린다.
+`sampler_check_test.dart`가 `SampleBank.byVel`이 4개씩(세기별) 다 채워졌는지 확인한다.
+
+### B0(5현 최저현) 확인
+B0(30.87Hz) 표본은 없다 — 사용자 결정대로 **E1(41.20Hz, 4자리 중 최저 root)에서
+`SampleBank.pick`(로그스케일 최근접)이 자동으로 골라 피치 시프트**하게 뒀다(새 로직
+없음, 기존 `pick` 그대로). `sampler_check_test.dart`의 새 검사가
+`bank.pick(2, 30.87).rootFreq == 41.20`과 실제 렌더된 기본 주파수(자기상관, 30.9Hz)
+둘 다로 확인했다 — 통과.
+
+### 레벨(피크) 맞추기
+`test/sample_level_meter.dart`로 실측 후 `test/sample_level_test.dart`(피크 기준 3dB
+이내, 천장 무초과)로 맞췄다. jbass 원본은 트림 1.0 기준 피크 **−4.0dBFS**로 다른 표본
+악기들(−6~−7dBFS)보다 2dB 튀었다 — `kSampleTrim['jbass'] = 0.79`로 내려 **−6.0dBFS**에
+맞췄다(전체 폭 1.1dB, 기준 3dB 이내).
+
+### 등록(코드 3곳 + 자산)
+- `lib/sampler.dart` — `_kSampleSets['jbass']`(4 root), `kSamplePan['jbass'] = 0.0`(베이스는
+  가운데, fingerbass와 동일), `kSampleTrim['jbass'] = 0.79`.
+- `lib/instruments.dart` — `INSTRUMENTS['jbass']`(표본 로드 전 대체음, **fingerbass 값을
+  그대로 복사** — 같은 손가락 뜯는 일렉 베이스 계열), `SUSLV`·`ATK`·`SPACE`·`BASS_VOICE`도
+  fingerbass와 같은 값으로 등록. **`VOICE_LABEL`·`ALL_VOICES`·`kVoiceFamily`·
+  `kInstrumentPicks`(project.dart)는 이번엔 일부러 안 건드렸다** — 이 넷이 실제 악기
+  선택 UI를 노출시키는 표라, 손대면 "이번엔 UI 연결 안 한다"는 지시를 어기게 된다.
+  `kInstrumentPicks`가 수동 목록이라 `INSTRUMENTS`에 추가해도 UI에 저절로 안 뜬다는 것을
+  코드로 확인했다.
+- `lib/instrument_packs.dart`는 안 건드렸다 — `kBaseInstrumentKeys`가
+  `INSTRUMENTS.keys`에서 `kAddonPackSampleKeys`(현악·관악 추가팩)를 뺀 나머지라, jbass를
+  `kAddonPackSampleKeys`에 안 넣은 것만으로 자동으로 **기본팩**에 들어간다
+  (`instrument_packs_check_test.dart`로 확인).
+- `pubspec.yaml` — `assets/samples/jbass/` 한 줄 추가.
+- `tool/prep_samples.dart` — `maxSecOverride['jbass'] = 3.0`.
+- `assets/samples/jbass/SOURCE.md` 새로 씀 — **License: NEEDS VERIFICATION**(사용자 개인
+  녹음, 출처/배포 조건 미확인 — 상업 배포 전 반드시 확인).
+- `test/sample_level_meter.dart`·`test/sample_level_test.dart` — `_testFreq['jbass'] = 65.41`
+  (제 음역대에서 재도록).
+- `test/sampler_check_test.dart` — "표본 J-Bass(기본팩)" 새 테스트: 자산 로드·피치
+  시프트(F#1)·B0 대체 확인 3건.
+
+### 확인
+- `flutter analyze` — **36건, 기준선과 동일**(새 경고 없음).
+- `flutter test` — **206 전원 통과**(기준선 205 + jbass 신규 1). 전체 스위트 완주.
+- `flutter test test/sample_level_test.dart` — jbass 포함 전체 표본 악기 피크 −7.0~−5.9dB
+  (폭 1.1dB), 천장 초과 없음.
+- `flutter test test/sampler_check_test.dart` — jbass 4 root(세기별 4개씩) 로드,
+  피치 시프트 오차 <3%, B0 대체 root 확인 전부 통과.
+- 원본 폴더(`~/Downloads/bk!'s_new_jbass/`) 파일 8개·타임스탬프 그대로 — 수정 없음
+  확인(`ls -la` 재확인).
+
+### 남은 것 / 막힌 것
+- **실기기 확인 필요**: 이번 작업은 로딩·레벨만 시뮬레이터/유닛 테스트로 쟀다 — 실제
+  두들 연주에 연결된 뒤(다음 라운드) 실기기에서 음 끊김·표본 전환 지연이 없는지 봐야 한다.
+- License: NEEDS VERIFICATION — 상업적 배포 전 출처 확인 필수.
+- 다음 라운드(editor-ui/design): `VOICE_LABEL['jbass']`(예: "J-Bass")·`ALL_VOICES`·
+  `kVoiceFamily['베이스']`·`project.dart`의 `kInstrumentPicks`에 추가해야 실제로 고를 수
+  있다. 이번엔 일부러 안 했다.
