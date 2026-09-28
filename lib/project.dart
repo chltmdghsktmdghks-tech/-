@@ -71,6 +71,7 @@ const List<(String, String, String)> kInstrumentPicks = [
   ('', '드럼', 'drum'),
   ('bass', '신스 베이스', 'bass'),
   ('fingerbass', '핑거 베이스', 'bass'),
+  ('jbass', 'J-베이스', 'bass'),
   ('upright', '업라이트 베이스', 'bass'),
   ('piano', '피아노', 'chord'),
   ('epiano', '일렉 피아노', 'chord'),

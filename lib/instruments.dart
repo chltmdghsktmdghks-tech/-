@@ -768,7 +768,8 @@ WaveSet waveFor(String voice, String basic) {
 const Map<String, String> VOICE_LABEL = {
   'piano': '피아노', 'epiano': '일렉 피아노', 'guitar': '기타', 'nylon': '나일론 기타',
   'upright': '업라이트 베이스', 'harp': '하프', 'marimba': '마림바', 'bell': '벨',
-  'pluck': '플럭', 'bass': '신스 베이스', 'fingerbass': '핑거 베이스', 'moogbass': '무그 베이스',
+  'pluck': '플럭', 'bass': '신스 베이스', 'fingerbass': '핑거 베이스', 'jbass': 'J-베이스',
+  'moogbass': '무그 베이스',
   'pad': '패드', 'analogpad': '아날로그 패드', 'strings': '스트링', 'jpstrings': 'JP 스트링',
   'violin': '바이올린', 'cello': '첼로', 'brass': '브라스', 'analogbrass': '아날로그 브라스',
   'sax': '색소폰', 'trumpet': '트럼펫', 'clarinet': '클라리넷', 'flute': '플루트',
@@ -792,6 +793,7 @@ const List<String> ALL_VOICES = [
   'upright',
   'bass',
   'fingerbass',
+  'jbass',
   'moogbass',
   'wobble',
   'pad',
@@ -837,7 +839,7 @@ const Map<String, List<String>> kVoiceFamily = {
     'pad',
     'analogpad',
   ],
-  '베이스': ['upright', 'bass', 'fingerbass', 'moogbass'],
+  '베이스': ['upright', 'bass', 'fingerbass', 'jbass', 'moogbass'],
   '목소리': ['vocal'],
 };
 

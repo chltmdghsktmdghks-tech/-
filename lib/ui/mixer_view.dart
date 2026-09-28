@@ -959,7 +959,13 @@ class _InstrumentToneSection extends StatelessWidget {
     required this.onChanged,
   });
 
-  static const _kBassVoices = {'bass', 'fingerbass', 'moogbass', 'upright'};
+  static const _kBassVoices = {
+    'bass',
+    'fingerbass',
+    'jbass',
+    'moogbass',
+    'upright',
+  };
   static const _kStringsVoices = {'strings', 'jpstrings', 'violin', 'cello'};
   static const _kBrassVoices = {
     'brass',

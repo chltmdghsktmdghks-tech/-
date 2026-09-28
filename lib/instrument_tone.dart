@@ -112,7 +112,13 @@ const Map<String, (double, double, double)> kBrassMuteEq = {
   'mute': (-3, -2, 4),
 };
 
-const Set<String> _kBassVoices = {'bass', 'fingerbass', 'moogbass', 'upright'};
+const Set<String> _kBassVoices = {
+  'bass',
+  'fingerbass',
+  'jbass',
+  'moogbass',
+  'upright',
+};
 const Set<String> _kStringsVoices = {'strings', 'jpstrings', 'violin', 'cello'};
 const Set<String> _kBrassVoices = {
   'brass',

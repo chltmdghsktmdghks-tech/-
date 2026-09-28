@@ -106,6 +106,7 @@ const Map<String, List<String>> kBandInstrument = {
     'upright',
     'bass',
     'fingerbass',
+    'jbass',
     'moogbass',
   ],
   // 관악기 — **입에 대고 부는** 것들
