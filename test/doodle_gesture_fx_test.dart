@@ -25,20 +25,20 @@ Future<void> _open(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 100));
 }
 
-/// 친 자리 물결·충전 링 — 화면 좌표 `Positioned`(지름 < 200). 실제 시계로 크기가
-/// 자라므로 크기 대신 **있는가**만 본다. 치기 전에는 하나도 없어야 한다.
-final _freshRipple = find.byWidgetPredicate(
-  (w) => w is Positioned && w.width != null && w.width! < 200,
-);
+/// 친 자리 물결 — 2026-09-30 부터 위젯이 아니라 **한 장의 그림**(`CustomPaint`, 키 `doodle-fx`)이라
+/// 화면 상태의 살아 있는 물결 수로 잰다. 치기 전에는 0 이어야 한다.
+int _live(WidgetTester t) =>
+    (t.state(find.byType(DoodlePlayView)) as dynamic).debugLiveRipples as int;
 
 void main() {
   testWidgets('드럼: 친 자리에 물결이 뜨고, 단계 이름 밑에 악기 역할 한 줄이 있다', (tester) async {
     await _open(tester);
     expect(find.textContaining('심장박동'), findsOneWidget);
-    expect(_freshRipple, findsNothing);
+    expect(find.byKey(const ValueKey('doodle-fx')), findsOneWidget);
+    expect(_live(tester), 0);
     final g = await tester.startGesture(const Offset(80, 400));
     await tester.pump();
-    expect(_freshRipple, findsWidgets);
+    expect(_live(tester), greaterThan(0));
     await g.up();
   });
 
@@ -50,7 +50,7 @@ void main() {
     expect(find.text('세게'), findsOneWidget);
     final g = await tester.startGesture(const Offset(300, 400));
     await tester.pump();
-    expect(_freshRipple, findsWidgets, reason: '예전엔 베이스에 물결이 아예 없었다');
+    expect(_live(tester), greaterThan(0), reason: '예전엔 베이스에 물결이 아예 없었다');
     await g.up();
   });
 

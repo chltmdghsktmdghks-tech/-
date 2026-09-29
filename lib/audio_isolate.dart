@@ -25,10 +25,12 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_pcm_sound/flutter_pcm_sound.dart';
 
+import 'drum_sampler.dart' show ensureDrumPieceLoaded;
 import 'engine.dart';
 import 'fx.dart';
 import 'genre_mix.dart';
 import 'mixer.dart';
+import 'sampler.dart' show ensureInstrumentLoaded;
 import 'synth.dart' show kPartLive;
 
 /// 이름으로 버스 하나. 'drum'·'live' 는 붙박이, 나머지는 트랙 슬롯이다.
@@ -172,6 +174,7 @@ const int _cDrumRelease = 26; // 그 킥을 놓는다 — 꼬리가 진다
 const int _cSwell = 27; // 버스 스웰 진행도를 민다
 const int _cSwellRamp = 28; // 버스 스웰을 시간에 걸쳐 올린다
 const int _cSwellClear = 29; // 스웰 전부 걷기
+const int _cPreload = 30; // 표본을 미리 읽어 둔다 (첫 타격부터 표본으로 나게)
 
 /// 메인(UI) 쪽에서 쓰는 손잡이
 class AudioClient {
@@ -320,6 +323,22 @@ class AudioClient {
 
   /// 스웰 전부 걷기(전부 원래 소리).
   void clearSwell() => _tx.send([_cSwellClear]);
+
+  /// 표본을 **미리 읽어 둔다** (2026-09-30, 두들 진입 시점). 표본은 오디오 아이솔레이트가 읽으므로
+  /// (UI 쪽에서 `ensureInstrumentLoaded` 를 불러도 이 아이솔레이트의 메모리는 안 채워진다) 이름만
+  /// 보내 그쪽에서 **기존 로드 함수**를 부르게 한다. 이미 읽었거나 읽는 중이면 아무 일도 안 한다.
+  /// [voices] 는 악기 이름들, [drumPieces] 는 (조각 이름, 표본 세트) 쌍들.
+  void preloadSamples({
+    List<String> voices = const [],
+    List<(String, String)> drumPieces = const [],
+  }) {
+    if (voices.isEmpty && drumPieces.isEmpty) return;
+    _tx.send([
+      _cPreload,
+      List<String>.of(voices),
+      [for (final (piece, set) in drumPieces) <String>[piece, set]],
+    ]);
+  }
 
   void setInserts(String bus, List<Map<String, dynamic>> slots) =>
       _tx.send([_cInserts, bus, slots]);
@@ -997,6 +1016,21 @@ int handleAudioMessage(
         );
       case _cSwellClear:
         engine.clearSwell();
+      case _cPreload:
+        // 하나씩 차례로 — 한꺼번에 파싱하면 급식 루프가 그만큼 멈춘다. 각 `await` 사이에
+        // 급식 루프가 끼어든다. 실패는 로드 함수가 스스로 삼킨다(합성으로 대신).
+        final voices = [for (final v in (m[1] as List)) v as String];
+        final pieces = [
+          for (final e in (m[2] as List)) ((e as List)[0] as String, e[1] as String),
+        ];
+        unawaited(() async {
+          for (final v in voices) {
+            await ensureInstrumentLoaded(v);
+          }
+          for (final (piece, set) in pieces) {
+            await ensureDrumPieceLoaded(piece, set: set);
+          }
+        }());
       case _cBatch:
         for (final n in (m[1] as List)) {
           final e = n as List;

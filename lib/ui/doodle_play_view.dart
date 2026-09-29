@@ -34,11 +34,14 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:flutter/services.dart';
 
 import '../audio_isolate.dart';
 import '../doodle_chords.dart';
+import '../doodle_hints.dart';
 import '../doodle_gestures.dart';
+import '../drums.dart' show DRUM_KITS;
 import '../edit_ops.dart' show DrumOps;
 import '../engine.dart' show boomTailFor;
 import '../genre_mix.dart' show kGenreDuck;
@@ -195,6 +198,18 @@ class _Finger {
   /// 지금 손가락의 세로 위치(0=위, 1=아래) — 하이햇 롤 밀도를 **롤 도중에도** 따라간다.
   double frac;
 
+  /// 처음 닿은 세로 위치 — 오픈/롤·8분/16분 경계의 되돌림(히스테리시스)이 「처음 어느 쪽이었나」를 본다.
+  final double downFrac;
+
+  /// 지금 손가락의 세로 좌표(픽셀) — 스웰이 올라온 만큼을 화면에 그리려고.
+  double curY;
+
+  /// 롤 크레셴도의 지금 단계(0~2) — 경계에서 흔들려도 안 튀게 직전 단계를 기억한다.
+  int rollBump = 0;
+
+  /// 코드: 이 탭이 정한 진행 방향(−1·0·+1)과 색(1=위 화려·0=아래 담백) — 화면 표시용.
+  int dir = 0, color = 0;
+
   /// 하이햇 롤이 지금 8분(성긴)인가 — 바뀌는 순간에만 손끝으로 알리려고 든다.
   bool? hatSparse;
 
@@ -242,7 +257,9 @@ class _Finger {
     required this.zone,
     required this.step,
     this.frac = 0.5,
-  }) : curX = downX;
+  }) : curX = downX,
+       curY = downY,
+       downFrac = frac;
 }
 
 /// 한 판을 칠 때 칸별로 모은 손짓(세기·음 고르기·미끄러짐·톡) — 판을 적을 때 쓴다.
@@ -275,10 +292,29 @@ class _Ripple {
 
   /// 롤로 넘어간 순간의 큰 물결인가(한 방과 구분해서 보여 준다).
   final bool roll;
-  const _Ripple(this.at, this.vel, this.born, {this.roll = false});
+
+  /// 어느 악기로 쳤나('kick'·'snare'·'hat'·'hatopen'·'bass'·'chord') — 악기마다 물결 모양이 다르다.
+  final String lane;
+
+  /// 코드 탭이면 그 방향(−1·0·+1)과 색(1=위 화려) — 방향 화살표·반짝임을 물결에 얹는다.
+  final int dir, color;
+  const _Ripple(
+    this.at,
+    this.vel,
+    this.born, {
+    this.roll = false,
+    this.lane = '',
+    this.dir = 0,
+    this.color = 0,
+  });
 }
 
-class _DoodlePlayViewState extends State<DoodlePlayView> {
+class _FxRepaint extends ChangeNotifier {
+  void poke() => notifyListeners();
+}
+
+class _DoodlePlayViewState extends State<DoodlePlayView>
+    with SingleTickerProviderStateMixin {
   final _clock = LoopClock();
   Timer? _timer;
 
@@ -430,6 +466,49 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 따로 애니메이션 장치를 두지 않고 친 시각과 지금의 차로 셈한다.
   final List<_Ripple> _ripples = [];
 
+  // ── 60fps 타격 화면 (2026-09-30, B) ──
+  // 물결·충전 링·스웰 진행은 위젯이 아니라 **한 장의 그림**(`_HitFxPainter`)으로 그린다. 30ms 시계
+  // (`_tick`)의 `setState` 로는 33fps 라 물결이 뚝뚝 끊겼다. 손이 닿아 있거나 물결이 남아 있는 동안만
+  // 프레임마다(`_fxTicker`) 다시 그리고, 다 사그라들면 멈춘다(`_onFx`) — 놀 때는 배터리를 안 쓴다.
+  final _FxRepaint _fx = _FxRepaint();
+  late final Ticker _fxTicker;
+
+  /// 물결 하나가 완전히 사라지는 데 걸리는 최대 시간(ms) — 세게(3)·롤이 제일 오래 남는다.
+  static const int _kRippleMaxMs = 560;
+
+  /// 코드 탭 직후 구역이 번쩍이는 시간(ms).
+  static const int _kZoneFlashMs = 480;
+
+  /// 가장 최근 코드 탭의 시각·방향·색 — 구역 번쩍임(`_ChordZonePainter`)용.
+  DateTime? _flashAt;
+  int _flashDir = 0, _flashColor = 0;
+
+  // ── 손짓 오인식 줄이기 (2026-09-30, E) — 직전 탭의 구역을 기억해 경계에서 안 튀게 한다 ──
+  // 값/시간 상수는 `doodle_gestures.dart` (`kBandSlopPx`·`kStickyMs`·`kTapSlopPx`…).
+  final StickyBand _velX = StickyBand(const [1 / 3, 2 / 3]);
+  final StickyBand _velCtr = StickyBand(const [_kHardR, _kSoftR]);
+  final StickyBand _ghost = StickyBand(const [_kGhostFrac]);
+  final StickyBand _dirBand = StickyBand(const [1 / 3, 2 / 3]);
+  final StickyBand _colorBand = StickyBand(const [kChordColorSplit]);
+  final StickyBand _swellBand = StickyBand(const [kSwellZone]);
+  int? _lastRow;
+  int _lastRowMs = -1 << 40;
+
+  void _resetSticky() {
+    _velX.reset();
+    _velCtr.reset();
+    _ghost.reset();
+    _dirBand.reset();
+    _colorBand.reset();
+    _swellBand.reset();
+    _lastRow = null;
+    _flashAt = null;
+  }
+
+  // ── 첫 안내 카드 (2026-09-30, D) ──
+  /// 「?」를 눌러 이미 본 안내를 다시 띄우는 중인가.
+  bool _coachForce = false;
+
   /// 사다리 칸별 **마지막으로 지나온 시각** — 베이스에서 미끄러뜨릴 때
   /// (`_slideTo`) 남기는 궤적이다. [_kLadderTrailMs] 안이면 그 칸이 잠깐
   /// 밝아진다(지나온 흔적, 시각만 — 판정과 무관).
@@ -454,8 +533,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 이 시간 안에 떼면 **톡**(스타카토). 시간 축이라 다른 손짓과 안 겹친다.
   static const int _kStaccatoMs = 90;
 
-  /// 「톡」으로 치려면 이만큼 안에서 끝나야 한다.
-  static const double _kStaccatoSlop = 8;
+  /// 「톡」으로 치려면 이만큼 안에서 끝나야 한다 — 값은 `kTapSlopPx`(엄지가 구르는 만큼 넉넉히).
+  static const double _kStaccatoSlop = kTapSlopPx;
 
   /// 드럼에서 이만큼 붙이고 있으면 **롤**이 돈다.
   static const int _kRollAfterMs = 180;
@@ -471,8 +550,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 한 번에 받을 손가락 수 — `TapRecorder` 의 판이 넷이라 거기에 맞춘다.
   static const int _kMaxFingers = 4;
 
-  /// 탭 이펙트 한 번이 사그라드는 시간.
-  static const Duration _kHitFx = Duration(milliseconds: 320);
 
   /// 이번 판에서 그 칸을 **얼마나 세게** 쳤나(칸 → 1~3).
   /// `TapHit` 에는 세기 칸이 없어서(박자만 담는 그릇이다) 여기 따로 들고 있다가
@@ -550,6 +627,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   @override
   void initState() {
     super.initState();
+    _fxTicker = createTicker(_onFx);
     final p = widget.project;
     // **들어오면서 아직 울리고 있을 수 있는 소리부터 끊는다** (사용자 신고,
     // 2026-09-22: "가락이 들려 — 두드린 것만 나와야지"). 씬 화면에서 멜로디
@@ -698,10 +776,41 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         if (s.aheadFrames > 0) _buffered = s.aheadFrames;
       });
     }
+    // 이 곡이 쓸 악기·드럼 표본을 **미리 읽어 둔다**(2026-09-30, C) — 안 그러면 첫 타격이 표본이
+    // 아니라 합성음으로 난다. 순서 정하기 화면에서 사용자가 고르는 동안 뒤에서 읽힌다.
+    _preloadSamples();
+    // 첫 안내를 이미 봤는지 읽는다(파일이라 늦게 온다 — 오면 다시 그린다).
+    unawaited(DoodleHints.load().then((_) {
+      if (mounted) setState(() {});
+    }));
     // **박 세기는 아직 안 시작한다** — 먼저 순서 정하기 화면을 보여 주고,
     // `_startStages()`가 확정된 뒤에 `_armStage()`를 부른다. 시계(`_timer`)는
     // 미리 켜 둬도 안전하다 — `_tick()`이 `_ordering` 동안은 그냥 돌아간다.
     _timer = Timer.periodic(const Duration(milliseconds: 30), (_) => _tick());
+  }
+
+  /// 이 곡의 악기·드럼 표본을 오디오 아이솔레이트가 **미리** 읽게 한다(2026-09-30, C).
+  ///
+  /// 표본은 오디오 쪽 메모리에 올라가므로 UI 에서 `ensureInstrumentLoaded` 를 불러도 소용없다 —
+  /// 이름만 보내 그쪽이 **기존 로드 함수**를 부르게 한다(`AudioClient.preloadSamples`). 이미 읽었거나
+  /// 읽는 중이면 아무 일도 안 하니 여러 번 불러도 안전하다. 진입 지연은 없다(메시지 하나, 읽기는 뒤에서).
+  /// 드럼은 표본 킷일 때만, 그리고 이 화면이 실제로 치는 조각(킥·스네어·닫힌/열린 하이햇)만.
+  void _preloadSamples() {
+    final h = widget.host;
+    if (h == null) return;
+    final voices = <String>{_bassTrack.voice, _chordTrack.voice};
+    final pieces = <(String, String)>{};
+    const pieceOf = {
+      'kick': 'kick',
+      'snare': 'snare',
+      'hat': 'hatClosed',
+      'hatopen': 'hatOpen',
+    };
+    for (final e in pieceOf.entries) {
+      final kit = DRUM_KITS[_kitOfLane(e.key)];
+      if (kit != null && kit.sampled) pieces.add((e.value, kit.sampleSet));
+    }
+    h.preloadSamples(voices: voices.toList(), drumPieces: pieces.toList());
   }
 
   /// **킥 사이드체인 펌핑**(하우스 계열만 자동 ON, `setSidechainPump`). `playLoop`/`refreshLoop`/
@@ -809,6 +918,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _timer?.cancel();
     _reviewBlink?.cancel();
     _statsSub?.cancel();
+    _fxTicker.dispose();
+    _fx.dispose();
     _clock.dispose();
     final h = widget.host;
     h?.holdOff(-1);
@@ -889,6 +1000,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _resetChordPlan();
     _rollSteps.clear();
     _ripples.clear();
+    _resetSticky();
     // 잡고 있던 것을 **손가락 수만큼** 놓는다 — `_kHoldId` 하나만 놓으면
     // 두 번째 손가락 이후가 계속 울린다(판마다 +pad 로 쓰기 때문이다).
     for (var i = 0; i < _kMaxFingers; i++) {
@@ -955,6 +1067,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       _finishLap(pos);
       return;
     }
+    _fx.poke(); // 그림(물결·힌트 맥박)은 setState 없이도 다시 그린다
     setState(() {});
   }
 
@@ -1042,6 +1155,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
 
   void _finishLap(double pos) {
     _rec?.closeAll(pos);
+    // 한 판을 **실제로 쳐 봤다** = 이 악기의 손짓을 알았다 — 첫 안내는 다시 안 띄운다.
+    if ((_rec?.hits().isNotEmpty ?? false) || _rollSteps.isNotEmpty) {
+      DoodleHints.markSeen(_coachKey);
+      _coachForce = false;
+    }
     widget.host?.holdOff(-1);
     setState(() {
       _pending = _rec?.hits() ?? const [];
@@ -1239,14 +1357,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 아무 기능 없는 장식이었다 — 보이는 것과 하는 일이 이제 같아졌다.
   ///
   /// 세 칸의 크기는 min(폭,높이) 기준 비율이라 어느 기기에서나 같은 느낌이다.
-  int _velFromCenter(Offset at, Size area) {
+  ///
+  /// 경계(`_kHardR`·`_kSoftR`)에서는 **직전 탭의 구역을 기억**해(`_velCtr`, 히스테리시스) 손이
+  /// 살짝 흔들려도 세게↔보통이 오락가락하지 않는다.
+  int _velFromCenter(Offset at, Size area, {int? nowMs}) {
     final m = area.width < area.height ? area.width : area.height;
     if (m <= 0) return 2;
     final dx = at.dx - area.width / 2, dy = at.dy - area.height / 2;
     final r = math.sqrt(dx * dx + dy * dy) / m;
-    if (r < _kHardR) return 3; // 한가운데 — 악센트
-    if (r < _kSoftR) return 2; // 그 바깥 — 보통
-    return 1; // 가장자리 — 고스트
+    // 구역 0=한가운데(악센트 3) · 1=그 바깥(보통 2) · 2=가장자리(고스트 1)
+    final band = _velCtr.read(
+      r,
+      nowMs ?? DateTime.now().millisecondsSinceEpoch,
+      slop: kBandSlopPx / m,
+    );
+    return 3 - band;
   }
 
   /// 한가운데(세게) 구역의 반지름 — min(폭,높이) 대비.
@@ -1257,16 +1382,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   ///  · **킥**: 세로 = 고스트(아래, 여리게 1)↔정타(위). 정타의 세기는 가로(오른쪽이 셈, 2~3).
   ///  · **하이햇**: 세로가 롤 밀도라 세로로 세기를 못 읽는다 → 가로(왼쪽 여리게↔오른쪽 세게).
   ///  · **스네어**: 여태처럼 한가운데가 세게, 가장자리가 여리게.
-  int _drumVel(Offset at, Size area) {
+  int _drumVel(Offset at, Size area, {int? nowMs}) {
+    final t = nowMs ?? DateTime.now().millisecondsSinceEpoch;
     switch (_stageDef.drumLane) {
       case 'kick':
-        if (area.height > 0 && at.dy / area.height >= _kGhostFrac) return 1;
-        final v = _velFromX(at.dx, area.width);
+        // 고스트 경계도 직전 탭을 기억한다 — 경계에 걸친 킥이 세게↔고스트로 튀지 않게.
+        if (area.height > 0 &&
+            _ghost.read(at.dy / area.height, t, slop: kBandSlopPx / area.height) == 1) {
+          return 1;
+        }
+        final v = _velFromX(at.dx, area.width, nowMs: t);
         return v < 2 ? 2 : v;
       case 'hat':
-        return _velFromX(at.dx, area.width);
+        return _velFromX(at.dx, area.width, nowMs: t);
       default:
-        return _velFromCenter(at, area);
+        return _velFromCenter(at, area, nowMs: t);
     }
   }
 
@@ -1286,12 +1416,18 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 읽어라"). 가로는 사다리가 안 쓰는 축이라 안 겹친다. **왼쪽이 여리게,
   /// 오른쪽이 세게** — `_velFromCenter`와 같은 1~3 눈금을 가로 폭 3등분으로
   /// 준다.
-  int _velFromX(double dx, double width) {
+  ///
+  /// 1/3·2/3 경계에서는 **직전 탭의 구역을 기억**한다(`_velX`, 히스테리시스 `kBandSlopPx`) —
+  /// 엄지 살이 경계에 걸쳐 빠르게 연타할 때 세기가 1·2·1·2 로 튀던 것을 막는다.
+  int _velFromX(double dx, double width, {int? nowMs}) {
     if (width <= 0) return 2;
     final t = (dx / width).clamp(0.0, 1.0);
-    if (t < 1 / 3) return 1; // 왼쪽 — 여리게
-    if (t < 2 / 3) return 2; // 가운데 — 보통
-    return 3; // 오른쪽 — 세게
+    return _velX.read(
+          t,
+          nowMs ?? DateTime.now().millisecondsSinceEpoch,
+          slop: kBandSlopPx / width,
+        ) +
+        1; // 0 왼쪽=여리게(1) · 1 가운데=보통(2) · 2 오른쪽=세게(3)
   }
 
   /// 여기서부터 바깥은 여리게.
@@ -1321,6 +1457,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   ///
   /// [from] 을 주면 그 칸에서 나올 때만 바뀐다(히스테리시스) — 경계에 걸친
   /// 손가락이 두 음 사이를 덜덜 떠는 것을 막는다.
+  ///
+  /// 처음 닿을 때도 [from] 에 **직전 탭의 칸**을 주면(시간 안이면) 경계에 걸친 톡이 옆 칸으로 새지 않는다.
   int _rowFromY(double dy, double height, {int? from}) {
     if (height <= 0) return 0;
     final h = height / _kLadderRows;
@@ -1339,11 +1477,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 칸 번호 → 그 코드 안에서 몇 도 위인가. 뿌리·3도·5도·7도·한 옥타브 위.
   static const List<int> _kLadderTone = [0, 2, 4, 6, 7];
 
-  /// 구역 경계에서 이만큼 더 나가야 넘어간 것으로 본다.
-  static const double _kZoneSlop = 8;
+  /// 구역 경계에서 이만큼 더 나가야 넘어간 것으로 본다 — `kSlideSlopPx`.
+  static const double _kZoneSlop = kSlideSlopPx;
 
   /// 사다리에서 **지나온 칸이 밝게 남는 시간**(ms) — 미끄러뜨리기(`_slideTo`)
-  /// 궤적을 보여 준다. `_kHitFx`(320ms)보다 살짝 짧게 둬 너무 오래 안 끈다.
+  /// 궤적을 보여 준다. 물결(`_kRippleMaxMs`)보다 살짝 짧게 둬 너무 오래 안 끈다.
   static const int _kLadderTrailMs = 260;
 
   /// 손가락이 닿았다 — **누른 동안 계속 나는 소리**로 낸다(HOLD).
@@ -1393,14 +1531,28 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       pad++;
     }
     final now = DateTime.now();
+    final nowMs = now.millisecondsSinceEpoch;
     // 베이스는 **세로가 이미 음 높이**(사다리)라 세기를 세로 자리로 못
     // 읽는다. 그래서 **가로**를 쓴다(사용자 지시, 2026-09-24: "가로축으로
     // 세기를 읽어라") — 왼쪽이 여리게, 오른쪽이 세게. 사다리(세로)와 안 겹친다.
     // 코드는 세기 **균일**(2) — 좌우·상하가 다른 뜻(진행·색)을 가져갔다.
     final vel = _stageDef.kind == DoodleKind.chord
         ? 2
-        : (_hasTone ? _velFromX(at.dx, area.width) : _drumVel(at, area));
-    final zone = _hasTone ? _rowFromY(at.dy, area.height) : 0;
+        : (_hasTone
+              ? _velFromX(at.dx, area.width, nowMs: nowMs)
+              : _drumVel(at, area, nowMs: nowMs));
+    // 사다리 칸도 직전 탭이 시간 안이면 그 칸을 「출발 칸」으로 쓴다 — 경계에 걸친 톡의 히스테리시스.
+    final zone = _hasTone
+        ? _rowFromY(
+            at.dy,
+            area.height,
+            from: nowMs - _lastRowMs <= kStickyMs ? _lastRow : null,
+          )
+        : 0;
+    if (_hasTone) {
+      _lastRow = zone;
+      _lastRowMs = nowMs;
+    }
     final tone = _hasTone ? _kLadderTone[zone] : 0;
     final step = rec?.stepOf(pos) ?? 0;
     final f = _Finger(
@@ -1446,31 +1598,96 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       case DoodleKind.chord:
         _chordDown(step, at, area, f, recording: recording);
     }
-    _hapticForVel(vel);
-    setState(() => _addRipple(at, vel, now: now));
+    _hapticHit(vel);
+    setState(() {
+      _addRipple(at, vel, now: now, dir: f.dir, color: f.color);
+    });
   }
 
   /// [at] 에서 퍼지는 타격 물결을 하나 더한다. 오래된 것은 같이 치운다.
-  void _addRipple(Offset at, int vel, {required DateTime now, bool roll = false}) {
+  /// 악기(레인)는 이 순간의 단계에서 읽는다 — 물결 모양이 악기마다 다르다(`_HitFxPainter`).
+  void _addRipple(
+    Offset at,
+    int vel, {
+    required DateTime now,
+    bool roll = false,
+    String? lane,
+    int dir = 0,
+    int color = 0,
+  }) {
     _ripples.removeWhere(
-      (r) => now.difference(r.born).inMilliseconds > _kHitFx.inMilliseconds,
+      (r) => now.difference(r.born).inMilliseconds > _kRippleMaxMs,
     );
-    _ripples.add(_Ripple(at, vel.clamp(1, 3), now, roll: roll));
+    _ripples.add(
+      _Ripple(
+        at,
+        vel.clamp(1, 3),
+        now,
+        roll: roll,
+        lane: lane ?? _instKey,
+        dir: dir,
+        color: color,
+      ),
+    );
+    _wakeFx();
   }
+
+  /// 프레임 그림을 깨운다 — 이미 돌고 있으면 아무 일도 안 한다.
+  void _wakeFx() {
+    if (!_fxTicker.isActive) _fxTicker.start();
+  }
+
+  /// 프레임마다 — 그림을 다시 그리고, 할 일이 없으면(손도 물결도 구역 번쩍임도 없음) 멈춘다.
+  void _onFx(Duration _) {
+    _fx.poke();
+    final now = DateTime.now();
+    final live = _fingers.isNotEmpty ||
+        _ripples.any((r) => now.difference(r.born).inMilliseconds <= _kRippleMaxMs) ||
+        (_flashAt != null &&
+            now.difference(_flashAt!).inMilliseconds <= _kZoneFlashMs);
+    if (!live && _fxTicker.isActive) _fxTicker.stop();
+  }
+
+  /// 햅틱·물결이 쓰는 악기 이름 — 드럼은 레인, 나머지는 종류.
+  String get _instKey => switch (_stageDef.kind) {
+    DoodleKind.drum => _stageDef.drumLane ?? 'kick',
+    DoodleKind.bass => 'bass',
+    DoodleKind.chord => 'chord',
+  };
+
+  /// 이 단계의 첫 안내 카드를 기억하는 이름 — 드럼은 레인별로.
+  String get _coachKey => _instKey;
 
   /// 친 세기에 맞는 손끝 되울림(사용자 요청, 2026-09-22: "타격 햅틱 추가") —
   /// 화면 잔물결(시각) 하나로만 "쳤다"를 확인해야 했다. 리듬을 탈 때는 화면을
   /// 안 보므로(힌트 문구도 그렇게 적혀 있다) 손끝 신호가 있어야 한다. 롤(연타)
   /// 도중에는 여기를 안 거친다 — `_tickRoll`이 따로, **상태가 바뀌는 순간에만**
   /// 한 번 울린다(계속 울리면 드르륵거려 더 나쁘다).
-  void _hapticForVel(int vel) {
-    switch (vel) {
-      case 3:
-        HapticFeedback.heavyImpact();
-      case 2:
-        HapticFeedback.mediumImpact();
-      default:
-        HapticFeedback.lightImpact();
+  ///
+  /// 2026-09-30 (A): 세기만이 아니라 **악기도** 본다 — 킥은 묵직(heavy), 스네어·코드·베이스는
+  /// 중간(medium), 하이햇은 짧고 가볍게(light·똑). 규칙은 `doodleHaptic`(시험이 직접 잰다).
+  /// 친 소리의 무게와 손끝의 무게가 같은 방향이어야 "쳤다"가 산다.
+  void _hapticHit(int vel) => _fireHaptic(doodleHaptic(_instKey, vel));
+
+  void _fireHaptic(DoodleHaptic h) {
+    void go() {
+      switch (h) {
+        case DoodleHaptic.heavy:
+          HapticFeedback.heavyImpact();
+        case DoodleHaptic.medium:
+          HapticFeedback.mediumImpact();
+        case DoodleHaptic.light:
+          HapticFeedback.lightImpact();
+        case DoodleHaptic.tick:
+          HapticFeedback.selectionClick();
+      }
+    }
+
+    // 소리는 버퍼를 지나 늦게 닿는다 — 필요하면 진동도 그만큼 미룬다(기본 0 = 즉시).
+    if (kHapticDelayMs > 0) {
+      Timer(const Duration(milliseconds: kHapticDelayMs), go);
+    } else {
+      go();
     }
   }
 
@@ -1527,8 +1744,33 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   }) {
     final bar = _barOf(step);
     final pick = recording ? _cp.pickAt(bar) : _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
-    final color = doodleColorOfY(area.height <= 0 ? 0.5 : at.dy / area.height);
-    final dir = doodleDirOfX(area.width <= 0 ? 0.5 : at.dx / area.width);
+    // 방향(좌·중·우 3구역)과 색(위·아래)은 경계에서 **직전 탭을 기억**한다(히스테리시스) —
+    // 「마지막 탭이 다음 마디를 정한다」라서 경계에 걸친 탭이 반대쪽으로 읽히면 진행이 뒤집힌다.
+    // 세로 경계는 엄지가 닿는 가운데 쪽으로 내렸다(`kChordColorSplit`).
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final dir = area.width <= 0
+        ? 0
+        : chordDirOfBand(
+            _dirBand.read(
+              (at.dx / area.width).clamp(0.0, 1.0),
+              nowMs,
+              slop: kBandSlopPx / area.width,
+            ),
+          );
+    final color = area.height <= 0
+        ? 0
+        : chordColorOfBand(
+            _colorBand.read(
+              (at.dy / area.height).clamp(0.0, 1.0),
+              nowMs,
+              slop: kBandSlopPx / area.height,
+            ),
+          );
+    f.dir = dir;
+    f.color = color;
+    _flashAt = DateTime.now();
+    _flashDir = dir;
+    _flashColor = color;
     var spec = doodleChordSpec(_key, pick, color);
     // 록 기타의 파워코드 — 재생(`buildChordPattern` 의 plainType)과 같은 규칙.
     // 종류를 안 적은 자리(=담백)만 스타일이 정한다.
@@ -1560,7 +1802,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // (`_pressMove` 가 `setSwell`). 스웰은 코드 버스(`kSwellBus`)에 걸리므로, 라이브 전용
     // 버스(`kPartLive`)로 내면 안 걸린다 — 스웰 음색은 코드 버스로 낸다.
     final swellVoice = isSwellVoice(_chordTrack.voice);
-    if (swellVoice && swellStartsAt(area.height <= 0 ? 0 : at.dy / area.height)) {
+    if (swellVoice &&
+        area.height > 0 &&
+        _swellBand.read(
+              (at.dy / area.height).clamp(0.0, 1.0),
+              nowMs,
+              slop: kBandSlopPx / area.height,
+            ) ==
+            1) {
       f.swell = true;
       widget.host?.setSwell(kSwellBus, kSwellStart, smoothSec: 0.005);
     }
@@ -1596,7 +1845,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     if (f != null && area.height > 0) {
       f.frac = (at.dy / area.height).clamp(0.0, 1.0);
     }
-    if (f != null) f.curX = at.dx;
+    if (f != null) {
+      f.curX = at.dx;
+      f.curY = at.dy;
+    }
     if (area.width > 0) _area = area;
     if (f == null || f.swiped || !_hasPitch) return;
     final dx = at.dx - f.downX;
@@ -1615,7 +1867,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // ── 코드: 움직임은 (스웰 말고는) 소리를 안 바꾼다 ──
     // 스웰 손가락이면 올라온 만큼 코드 버스를 차오르게 한다. 손이 멈추면 값도 그대로 남는다.
     if (f.swell) {
-      widget.host?.setSwell(kSwellBus, swellLevel(f.downY, at.dy, area.height));
+      widget.host?.setSwell(
+        kSwellBus,
+        swellLevel(f.downY, at.dy, area.height, deadPx: kSwellDeadPx),
+      );
     }
     // 좌우·상하는 **닿은 순간의 자리**로 읽는다(`_chordDown`) — 즉시 들려야 하고,
     // 쓸기를 기다리면 리듬이 늦는다. 전위 쓸기는 없앴다(2026-09-29 (12)).
@@ -1737,13 +1992,22 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // **오픈 하이햇** — 하이햇을 꾹(180ms) 누르고 있는데 손이 아래 구역이면 롤이 아니라
       // 한 번 「지잉」(`hatopen`). 위쪽이면 예전처럼 16분 롤이다. 미리 예약하지 않고
       // **실제로 180ms 를 채운 뒤에** 낸다 — 톡 친 손가락(60~90ms)이 오픈이 되면 안 되므로.
-      if (lane == 'hat' && !f.rolled && !f.openFired && hatHoldOpens(f.frac)) {
+      // 경계(`kOpenHatZone`)는 **처음 닿은 자리를 기억**한다 — 롤을 하려고 위쪽에 닿았는데 손이
+      // 살짝 내려와 경계를 스치기만 해도 오픈으로 뒤집히던 것을 막는다(`hatHoldOpensSticky`).
+      if (lane == 'hat' &&
+          !f.rolled &&
+          !f.openFired &&
+          hatHoldOpensSticky(
+            downFrac: f.downFrac,
+            frac: f.frac,
+            slop: _area.height <= 0 ? 0 : kBandSlopPx / _area.height,
+          )) {
         if (now.isBefore(next)) continue;
         f.openFired = true;
         f.rollNext = null;
         hits.add([_kitOfLane('hatopen'), 'hatopen', f.vel, 180.0, 0.0]);
         HapticFeedback.selectionClick(); // 「열렸다」 — 상태가 바뀌는 순간 한 번
-        _addRipple(Offset(f.downX, f.downY), 3, now: now, roll: true);
+        _addRipple(Offset(f.downX, f.downY), 3, now: now, roll: true, lane: 'hatopen');
         continue;
       }
       // 아직 롤이 시작될 때가 아니다(180ms 전에 떼면 그냥 한 방이다).
@@ -1755,7 +2019,16 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       final int unit;
       if (lane == 'hat') {
         // 하이햇은 **지금 손가락의 세로 위치**가 밀도다(롤 도중 위로 밀면 촘촘해진다).
-        final sparse = f.frac >= _kHatSparseFrac;
+        // 8분↔16분 경계도 되돌림이 있다 — 처음엔 닿은 자리, 그 뒤엔 직전 밀도를 기억한다.
+        final sparse = stickyBand(
+              f.frac,
+              const [_kHatSparseFrac],
+              prev: f.hatSparse == null
+                  ? (f.downFrac >= _kHatSparseFrac ? 1 : 0)
+                  : (f.hatSparse! ? 1 : 0),
+              slop: _area.height <= 0 ? 0 : kBandSlopPx / _area.height,
+            ) ==
+            1;
         if (f.hatSparse != null && f.hatSparse != sparse) {
           HapticFeedback.selectionClick(); // 밀도가 바뀐 순간만 한 번
         }
@@ -1801,7 +2074,17 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         // **크레셴도** — 롤 도중 손을 처음 자리에서 오른쪽으로 밀수록(폭의 1/4마다 한 단계)
         // **지금 X 로** 세기가 오른다(가로 = 세기 그대로). 밀지 않으면 예전과 같다.
         final base = f.vel > 1 ? f.vel - 1 : 1;
-        final rv = rollVel(base, f.curX - f.downX, _area.width);
+        // 단계 경계도 되돌림(`rollBumpSticky`) — 폭의 1/4 선에서 손이 떨려도 세기가 안 튄다.
+        // 단계가 **올라간** 순간만 손끝으로 한 번 알린다(상태가 바뀌는 순간에만).
+        final bump = rollBumpSticky(
+          f.curX - f.downX,
+          _area.width,
+          f.rollBump,
+          slop: kBandSlopPx,
+        );
+        if (bump > f.rollBump) HapticFeedback.selectionClick();
+        f.rollBump = bump;
+        final rv = rollVelOfBump(base, bump);
         hits.add([_kitOfLane(lane), lane, rv, 180.0, delay]);
         // **도는 중 표시**(사용자 지시, 2026-09-24) — 이 연타가 실제로 들릴
         // 시각을 남겨 두면, 화면(`_rollFlashing`)이 그 시각 바로 뒤 짧은
@@ -2205,6 +2488,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     }
     // 편성이 바뀌었다 — 이전 음색에 걸어 둔 스웰은 걷는다.
     widget.host?.clearSwell();
+    _preloadSamples(); // 새로 고른 악기의 표본도 첫 타격 전에 읽어 둔다
     _previewInstrument(s);
     if (mounted) setState(() {});
   }
@@ -2447,6 +2731,26 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
               ],
             ),
           ),
+          if (onRetake != null && !_reviewing)
+            IconButton(
+              key: const ValueKey('doodle-coach-toggle'),
+              tooltip: '손짓 안내 (안내가 떠 있으면 닫기)',
+              onPressed: () {
+                if (_coachForce || !DoodleHints.seen(_coachKey)) {
+                  DoodleHints.markSeen(_coachKey);
+                  setState(() => _coachForce = false);
+                } else {
+                  setState(() => _coachForce = true);
+                }
+              },
+              icon: Icon(
+                Icons.help_outline,
+                size: 22,
+                color: (_coachForce || !DoodleHints.seen(_coachKey))
+                    ? Colors.white
+                    : Colors.white54,
+              ),
+            ),
           if (onRetake != null)
             // 아이콘만 있으면 "되감기·다시 시작"인 줄 모른다 — 글자를 붙여 눈에 띄게
             // (감사 2026-09-29). 누르면 이 악기를 **처음부터 다시** 친다.
@@ -2533,87 +2837,48 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     DoodleKind.chord => DS.trackChord,
   };
 
-  /// **친 자리에서** 퍼지는 물결 + **꾹 누르는 손가락 둘레의 충전 링**.
-  /// 이 화면 전체가 치는 자리라(`Listener`가 통째로 받는다) 물결도 화면 좌표로
-  /// 그린다 — 손가락이 닿은 곳이 반짝이고, 세게 칠수록 크고 진하다.
+  /// **친 자리에서** 퍼지는 물결 + 꾹 누르는 손가락의 충전 링 + 스웰·크레셴도 진행 —
+  /// 전부 **한 장의 그림**(`_HitFxPainter`)이다. 화면 전체가 치는 자리라(`Listener` 가 통째로 받는다)
+  /// 화면 좌표로 그린다. 그림이 프레임마다(60fps) 다시 그려지므로 물결이 부드럽게 퍼진다.
   ///
-  /// 세기 3단계가 눈으로 갈리게 **크기 차를 키웠다**(감사 2026-09-29: 예전
-  /// 42/58/74px 는 손가락에 가려 구분이 안 됐다) — 여리게 56, 보통 96, 세게
-  /// 150px. 한 방은 안이 채워졌다 사라지는 「플래시」를, 롤로 넘어간 순간은
-  /// 더 두꺼운 이중 링을 쓴다.
-  List<Widget> _touchFx() {
-    final now = DateTime.now();
-    final out = <Widget>[];
-    for (final r in _ripples) {
-      final ms = now.difference(r.born).inMilliseconds;
-      if (ms < 0 || ms > _kHitFx.inMilliseconds) continue;
-      final t = ms / _kHitFx.inMilliseconds; // 0 → 1
-      final reach = switch (r.vel) { 1 => 56.0, 2 => 96.0, _ => 150.0 };
-      final size = (r.roll ? 40.0 : 24.0) + (reach - 24.0) * Curves.easeOutCubic.transform(t);
-      final a = (0.30 + 0.16 * r.vel) * (1 - t);
-      out.add(
-        Positioned(
-          left: r.at.dx - size / 2,
-          top: r.at.dy - size / 2,
-          width: size,
-          height: size,
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: _stageColor().withValues(alpha: 0.22 * (1 - t) * (r.vel / 3)),
-              border: Border.all(
-                color: _stageColor().withValues(alpha: a),
-                width: (r.roll ? 4 : 2) + r.vel * 0.7,
-              ),
-            ),
-          ),
+  /// 세기 3단계가 눈으로 갈리게 크기·밝기 차를 키웠다 — 여리게 56 · 보통 96 · 세게 150px,
+  /// 세게는 흰 코어 번쩍임과 두 겹 고리. 악기마다 모양도 다르다(킥=묵직한 채운 원·스네어=이중 고리·
+  /// 하이햇=작고 빠른 불꽃·코드=방향 쐐기와 반짝임). 색은 그 단계의 트랙 색(`_stageColor`)이다.
+  Widget _touchFx() => Positioned.fill(
+    child: IgnorePointer(
+      child: RepaintBoundary(
+        child: CustomPaint(
+          key: const ValueKey('doodle-fx'),
+          painter: _HitFxPainter(this, _fx),
         ),
-      );
-    }
-    for (final f in _fingers.values) {
-      if (f.swiped) continue;
-      // 롤 충전 링 — 손가락 둘레에서 차오른다. 다 차면 물결이 터지고 링은 사라진다.
-      final charge = _chargeOf(f, now);
-      if (charge != null) {
-        out.add(
-          Positioned(
-            left: f.downX - 38,
-            top: f.downY - 38,
-            width: 76,
-            height: 76,
-            child: CircularProgressIndicator(
-              value: charge,
-              strokeWidth: 4,
-              backgroundColor: Colors.white12,
-              valueColor: AlwaysStoppedAnimation(_stageColor()),
-            ),
-          ),
-        );
-      }
-      // 롤이 도는 동안 — 박(격자)마다 손가락 밑이 깜빡인다.
-      final at = f.flashAt;
-      if (f.rolled && at != null) {
-        final diff = now.difference(at).inMilliseconds;
-        if (diff >= 0 && diff < 90) {
-          out.add(
-            Positioned(
-              left: f.downX - 30,
-              top: f.downY - 30,
-              width: 60,
-              height: 60,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: _stageColor().withValues(alpha: 0.5 * (1 - diff / 90)),
-                ),
-              ),
-            ),
-          );
-        }
-      }
-    }
-    return out;
+      ),
+    ),
+  );
+
+  /// 물결 하나가 사라지기까지(ms) — 세게일수록·킥일수록 오래, 하이햇은 짧고 빠르게.
+  int _rippleLife(_Ripple r) {
+    var ms = switch (r.vel) { 1 => 240, 2 => 320, _ => 440 };
+    if (r.roll) ms = 460;
+    if (r.lane == 'kick') ms = (ms * 1.2).round();
+    if (r.lane == 'hat') ms = (ms * 0.75).round();
+    return math.min(ms, _kRippleMaxMs);
   }
+
+  @visibleForTesting
+  int get debugLiveRipples {
+    final now = DateTime.now();
+    return _ripples.where((r) => now.difference(r.born).inMilliseconds <= _rippleLife(r)).length;
+  }
+
+  @visibleForTesting
+  bool get debugFxActive => _fxTicker.isActive;
+
+  /// 가장 최근 코드 탭의 (방향, 색) — 구역 번쩍임이 무엇을 가리켰는지.
+  @visibleForTesting
+  (int, int) get debugFlash => (_flashDir, _flashColor);
+
+  @visibleForTesting
+  List<String> get debugRippleLanes => [for (final r in _ripples) r.lane];
 
   static const Color _kCool = Color(0xFF6EA8FF), _kWarm = Color(0xFFFFB067);
 
@@ -2625,8 +2890,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 소리가 어긋난다.
   Widget _chordZones(Size area) {
     final dir = _curDir();
-    final f = _fingers.values.isEmpty ? null : _fingers.values.first.frac;
-    final upOn = f != null && f < 0.5, downOn = f != null && f >= 0.5;
     Widget label(String t, Alignment a, {double alpha = 0.22}) => Align(
       alignment: a,
       child: Padding(
@@ -2641,41 +2904,25 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         ),
       ),
     );
+    // 라벨의 세로 자리는 경계(`kChordColorSplit`)를 기준으로 두 구역 각각의 한가운데쯤.
+    final upY = 2 * (kChordColorSplit * 0.36) - 1;
+    final downY = 2 * (kChordColorSplit + (1 - kChordColorSplit) * 0.55) - 1;
     return IgnorePointer(
       child: Stack(
         children: [
-          // 세로 두 구역 — 눌린 쪽이 살짝 밝다.
-          Column(
-            children: [
-              Expanded(child: Container(color: Colors.white.withValues(alpha: upOn ? 0.05 : 0))),
-              Expanded(child: Container(color: Colors.white.withValues(alpha: downOn ? 0.05 : 0))),
-            ],
+          // 구역 색·경계선·맥박 치는 쐐기·탭 순간 번쩍임 — 한 장의 그림(60fps).
+          // 「긴장 = 왼쪽 · 해결 = 오른쪽 · 위 = 화려 · 아래 = 담백」이 처음 보는 사람에게도 보이게
+          // 옅은 띠가 아니라 **움직이는 화살표**로 알린다(감사 2026-09-30: 제스처 존재를 몰랐다).
+          Positioned.fill(
+            child: CustomPaint(
+              key: const ValueKey('doodle-chord-zones'),
+              painter: _ChordZonePainter(this, _fx),
+            ),
           ),
-          // 좌우 띠 — 착지 방향 쪽이 진하다.
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  color: _kCool.withValues(alpha: dir < 0 ? 0.20 : 0.05),
-                ),
-              ),
-              const Spacer(),
-              Expanded(
-                child: Container(
-                  color: _kWarm.withValues(alpha: dir > 0 ? 0.20 : 0.05),
-                ),
-              ),
-            ],
-          ),
-          // 뚜렷한 가운데 선.
-          Align(
-            alignment: Alignment.center,
-            child: Container(height: 2, color: Colors.white.withValues(alpha: 0.22)),
-          ),
-          label('◀ 긴장', Alignment.centerLeft, alpha: dir < 0 ? 0.6 : 0.25),
-          label('해결 ▶', Alignment.centerRight, alpha: dir > 0 ? 0.6 : 0.25),
-          label('위 · 화려하게 (7th)', const Alignment(0, -0.62)),
-          label('아래 · 담백하게', const Alignment(0, 0.62)),
+          label('◀ 긴장', Alignment.centerLeft, alpha: dir < 0 ? 0.7 : 0.3),
+          label('해결 ▶', Alignment.centerRight, alpha: dir > 0 ? 0.7 : 0.3),
+          label('위 · 화려하게 (7th)', Alignment(0, upY)),
+          label('아래 · 담백하게', Alignment(0, downY)),
           if (isSwellVoice(_chordTrack.voice))
             label('▲ 아래에서 위로 그으면 차올라요', const Alignment(0, 0.92), alpha: 0.32),
         ],
@@ -2785,6 +3032,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final cs = _clockState;
     final phase = cs?.phase ?? TapPhase.wait;
     final recording = phase == TapPhase.rec;
+    final coachOn = _coachVisible(phase);
     return Column(
       children: [
         _header(onRetake: _retake),
@@ -2798,7 +3046,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           child: LayoutBuilder(
             builder: (context, box) {
               final area = Size(box.maxWidth, box.maxHeight);
-              return Listener(
+              // 첫 안내 카드는 **Listener 밖**에 얹는다 — 안에 두면 카드의 「알겠어요」 를 누를 때도
+              // 드럼이 울린다. 카드 본문은 터치를 통과시키고(치는 자리를 안 가린다) 버튼만 받는다.
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: Listener(
                 behavior: HitTestBehavior.opaque,
                 onPointerDown: (e) => _pressDown(e, area),
                 onPointerMove: (e) => _pressMove(e.pointer, e.localPosition, area),
@@ -2827,7 +3080,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                     if (!_hasTone) _padCircle(area, phase, recording),
                     // 친 자리 물결·롤 충전 링 — 패드 위, 글자 아래. 화면 좌표라
                     // `Positioned` 로 그린다(전체가 치는 자리이므로).
-                    ..._touchFx(),
                     _landMarker(),
                     // 이름·상태는 위, 안내는 아래 — **치는 자리를 안 가린다.**
                     Align(
@@ -2870,7 +3122,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                         ],
                       ),
                     ),
-                    Align(
+                    if (!coachOn)
+                      Align(
                       alignment: Alignment.bottomCenter,
                       child: Padding(
                         padding: const EdgeInsets.only(bottom: 6),
@@ -2890,6 +3143,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                     ),
                   ],
                 ),
+                    ),
+                  ),
+                  _coachOverlay(phase),
+                  // 물결·링은 **카드 위**에 그린다 — 카드 밑에서 치면 손끝 반응이 가려진다.
+                  _touchFx(),
+                ],
               );
             },
           ),
@@ -2935,6 +3194,113 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     DoodleKind.chord => '곡의 색깔 · 화음을 눌러 깔아요',
     DoodleKind.bass => '화음의 뿌리 · 낮게 받쳐 줘요',
   };
+
+  // ── 첫 안내 카드 (2026-09-30, D. 발견성) ──
+  //
+  // 처음 그 악기를 만나면 **어떤 손짓이 있는지** 그림글자와 한 줄씩으로 알려 준다.
+  //  · 카드 본문은 터치를 통과시킨다(`IgnorePointer`) — 치는 자리를 안 가린다. 받는 것은 버튼뿐.
+  //  · 대기·미리 세기 동안만 뜬다. REC 가 시작되면 리듬을 타야 하니 사라진다(본 것으로 치진 않는다).
+  //  · 머리줄 「?」 를 누르거나 그 악기를 실제로 한 판 쳐 보면 다시 안 뜬다(`DoodleHints`, 파일에 기억).
+  //  · 「?」 로 언제든 다시 볼 수 있다.
+
+  bool _coachVisible(TapPhase phase) =>
+      !_ordering &&
+      !_reviewing &&
+      !_allDone &&
+      phase != TapPhase.rec &&
+      (_coachForce || !DoodleHints.seen(_coachKey));
+
+  Widget _coachOverlay(TapPhase phase) {
+    if (!_coachVisible(phase)) return const SizedBox.shrink();
+    final tips = doodleCoachTips(
+      _coachKey,
+      swell: isSwellVoice(_chordTrack.voice),
+      mute: isMuteVoice(_chordTrack.voice),
+      boom: doodleBoomKit(_kitOfLane('kick')),
+    );
+    if (tips.isEmpty) return const SizedBox.shrink();
+    final color = _stageColor();
+    return Positioned(
+      left: 12,
+      right: 12,
+      bottom: 8,
+      // 카드 전체가 터치를 통과시킨다 — 버튼을 두면 엄지가 제일 편한 아래쪽 치는 자리를 가로챈다.
+      // 닫는 길은 머리줄의 「?」 하나(누르면 이 악기 안내를 끈다)와 「한 판 쳐 보기」다.
+      child: IgnorePointer(
+        key: const ValueKey('doodle-coach'),
+        child: Container(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              decoration: BoxDecoration(
+                color: const Color(0xEB15171B),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: color.withValues(alpha: 0.5)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    height: 34,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '${_stageDef.label} 손짓',
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ),
+                  ),
+                  for (final t in tips)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 24,
+                            height: 24,
+                            alignment: Alignment.center,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: color.withValues(alpha: 0.2),
+                            ),
+                            child: Text(
+                              t.glyph,
+                              style: TextStyle(
+                                color: color,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              t.text,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 13,
+                                height: 1.3,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  const Text(
+                    '위쪽 ? 를 누르면 닫혀요 · 한 판 쳐 보면 다시 안 떠요',
+                    style: TextStyle(color: Colors.white38, fontSize: 11.5),
+                  ),
+                ],
+              ),
+            ),
+      ),
+    );
+  }
 
   /// 이 단계에서 **실제로 듣는 손짓만** 적는다. 안 쓰는 것까지 적어 두면
   /// 해 봤는데 아무 일도 안 일어나서 "고장 난 화면"으로 보인다.
@@ -3572,5 +3938,471 @@ class _OrderRow extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 타격 그림 (2026-09-30, B) — 판정·소리와 무관한 순수 화면 표시. 상태(`_ripples`·`_fingers`…)는
+// 화면이 들고 있고, 여기서는 시계와 값만 읽어 그린다.
+// ─────────────────────────────────────────────────────────────────────────────
+
+Color _alpha(Color c, double a) => c.withValues(alpha: a.clamp(0.0, 1.0));
+
+/// [center] 에서 [dirSign](−1 왼·+1 오른)쪽을 가리키는 쐐기(›) 하나.
+void _chevron(Canvas c, Offset center, double size, int dirSign, Paint paint) {
+  final p = Path()
+    ..moveTo(center.dx - dirSign * size * 0.5, center.dy - size)
+    ..lineTo(center.dx + dirSign * size * 0.5, center.dy)
+    ..lineTo(center.dx - dirSign * size * 0.5, center.dy + size);
+  c.drawPath(p, paint);
+}
+
+/// 위(+1)·아래(−1)를 가리키는 쐐기 하나.
+void _chevronV(Canvas c, Offset center, double size, int up, Paint paint) {
+  final p = Path()
+    ..moveTo(center.dx - size, center.dy + up * size * 0.5)
+    ..lineTo(center.dx, center.dy - up * size * 0.5)
+    ..lineTo(center.dx + size, center.dy + up * size * 0.5);
+  c.drawPath(p, paint);
+}
+
+/// 네 갈래 반짝임(✦) — 화려한 코드(위)를 쳤을 때 떠오른다.
+void _sparkle(Canvas c, Offset o, double r, Paint paint) {
+  c.drawLine(Offset(o.dx - r, o.dy), Offset(o.dx + r, o.dy), paint);
+  c.drawLine(Offset(o.dx, o.dy - r), Offset(o.dx, o.dy + r), paint);
+  final d = r * 0.55;
+  c.drawLine(Offset(o.dx - d, o.dy - d), Offset(o.dx + d, o.dy + d), paint);
+  c.drawLine(Offset(o.dx - d, o.dy + d), Offset(o.dx + d, o.dy - d), paint);
+}
+
+class _HitFxPainter extends CustomPainter {
+  final _DoodlePlayViewState s;
+  _HitFxPainter(this.s, Listenable repaint) : super(repaint: repaint);
+
+  @override
+  bool shouldRepaint(covariant _HitFxPainter old) => true;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final now = DateTime.now();
+    final base = s._stageColor();
+    for (final f in s._fingers.values) {
+      if (!f.swiped) _finger(canvas, size, f, now, base);
+    }
+    for (final r in s._ripples) {
+      _ripple(canvas, r, now, base);
+    }
+  }
+
+  // ── 물결 ──
+  void _ripple(Canvas c, _Ripple r, DateTime now, Color base) {
+    final life = s._rippleLife(r);
+    final ms = now.difference(r.born).inMilliseconds;
+    if (ms < 0 || ms > life) return;
+    final t = ms / life;
+    final e = Curves.easeOutCubic.transform(t);
+    final fade = 1 - t;
+    final v = r.vel;
+    final kick = r.lane == 'kick', hat = r.lane == 'hat', snare = r.lane == 'snare';
+    final laneK = kick ? 1.15 : (hat ? 0.72 : 1.0);
+    final reach = (v == 1 ? 56.0 : (v == 2 ? 96.0 : 150.0)) * laneK * (r.roll ? 1.15 : 1.0);
+    final rad = 12 + (reach / 2 - 12) * e;
+    // 고리는 악기 색을 지킨다(세게일수록 살짝 밝게) — 흰색은 코어 번쩍임에만 쓴다.
+    final hot = Color.lerp(base, Colors.white, v == 3 ? 0.22 : (v == 2 ? 0.1 : 0))!;
+
+    // 1) 부드러운 빛무리 — 세기가 셀수록 진하다.
+    final gr = rad * 1.25;
+    c.drawCircle(
+      r.at,
+      gr,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [_alpha(base, (0.22 + 0.12 * v) * fade), _alpha(base, 0)],
+        ).createShader(Rect.fromCircle(center: r.at, radius: gr)),
+    );
+    // 채워진 원 — 세기가 셀수록 진하다. 킥은 더 크고 묵직하게(북이 울리는 결).
+    c.drawCircle(
+      r.at,
+      rad * (kick ? 0.85 : 0.7),
+      Paint()..color = _alpha(base, (kick ? 0.20 : 0.12) * fade * (v / 3)),
+    );
+    // 2) 고리
+    c.drawCircle(
+      r.at,
+      rad,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = ((r.roll ? 4 : 2) + v * 0.7 + (kick ? 1.5 : 0)) * (1 - 0.5 * t)
+        ..color = _alpha(hot, (0.42 + 0.18 * v) * fade),
+    );
+    // 스네어 — 안쪽 고리가 하나 더(탁 하는 결).
+    if (snare) {
+      c.drawCircle(
+        r.at,
+        rad * 0.55,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5
+          ..color = _alpha(hot, 0.5 * fade),
+      );
+    }
+    // 세게 — 늦게 따라오는 두 번째 고리.
+    if (v == 3 && !hat) {
+      final t2 = ((ms - 70) / (life - 70)).clamp(0.0, 1.0);
+      if (ms > 70) {
+        c.drawCircle(
+          r.at,
+          rad * 0.62 + 10 * Curves.easeOutCubic.transform(t2),
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = _alpha(Colors.white, 0.4 * (1 - t2)),
+        );
+      }
+    }
+    // 하이햇 — 짧게 튀는 불꽃 선.
+    if (hat) {
+      final sp = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 1.6 + 0.4 * v
+        ..color = _alpha(hot, 0.75 * fade);
+      for (final ang in const [-2.4, -1.57, -0.74]) {
+        final d = Offset(math.cos(ang), math.sin(ang));
+        c.drawLine(r.at + d * (rad * 0.75), r.at + d * (rad * (1.05 + 0.15 * v)), sp);
+      }
+    }
+    // 3) 코어 번쩍임 — 맞는 순간 아주 짧게 밝다(세기가 셀수록 크고 세다).
+    final ct = (ms / (kick ? 150 : 110)).clamp(0.0, 1.0);
+    if (ct < 1) {
+      final cr = (7 + 5.0 * v) * (1 - 0.4 * ct);
+      c.drawCircle(
+        r.at,
+        cr,
+        Paint()
+          ..shader = RadialGradient(
+            colors: [_alpha(Colors.white, (1 - ct) * (0.35 + 0.2 * v)), _alpha(hot, 0)],
+          ).createShader(Rect.fromCircle(center: r.at, radius: cr)),
+      );
+    }
+    if (r.lane == 'chord') _chordCue(c, r, t, e, fade);
+  }
+
+  /// 코드 탭 — 방향(왼 긴장 · 오른 해결)을 쐐기가 날아가며, 색(위 화려 · 아래 담백)을 반짝임·선으로.
+  void _chordCue(Canvas c, _Ripple r, double t, double e, double fade) {
+    if (r.dir != 0) {
+      final tone = r.dir < 0 ? _DoodlePlayViewState._kCool : _DoodlePlayViewState._kWarm;
+      for (var i = 0; i < 3; i++) {
+        final lag = i * 0.12;
+        if (t < lag) continue;
+        final tt = ((t - lag) / (1 - lag)).clamp(0.0, 1.0);
+        final dx = r.dir * (30 + 78 * Curves.easeOutCubic.transform(tt));
+        _chevron(
+          c,
+          Offset(r.at.dx + dx, r.at.dy),
+          9.0 + 2 * i,
+          r.dir,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..strokeWidth = 4
+            ..color = _alpha(tone, (1 - tt) * (0.95 - 0.18 * i)),
+        );
+      }
+    }
+    if (r.color == 1) {
+      final sp = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 2.2
+        ..color = _alpha(Colors.white, 0.9 * fade);
+      _sparkle(c, Offset(r.at.dx - 20, r.at.dy - 26 - 46 * e), 7, sp);
+      _sparkle(c, Offset(r.at.dx + 18, r.at.dy - 20 - 34 * e), 5, sp);
+    } else {
+      c.drawLine(
+        Offset(r.at.dx - 16, r.at.dy + 24 + 8 * e),
+        Offset(r.at.dx + 16, r.at.dy + 24 + 8 * e),
+        Paint()
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 3
+          ..color = _alpha(Colors.white, 0.55 * fade),
+      );
+    }
+  }
+
+  // ── 닿아 있는 손가락 ──
+  void _finger(Canvas c, Size size, _Finger f, DateTime now, Color base) {
+    final cur = Offset(f.curX, f.curY);
+    // 닿음 확인용 빛무리 — "손가락이 인식됐다"를 눈으로.
+    c.drawCircle(
+      cur,
+      34,
+      Paint()
+        ..shader = RadialGradient(
+          colors: [_alpha(base, 0.22), _alpha(base, 0)],
+        ).createShader(Rect.fromCircle(center: cur, radius: 34)),
+    );
+    if (f.swell) _swell(c, size, f, base);
+
+    final origin = Offset(f.downX, f.downY);
+    // 롤 충전 링 — 꾹 누르는 동안 차오르고, 다 차면 물결이 터진다.
+    final charge = s._chargeOf(f, now);
+    if (charge != null) {
+      final opens = s._stageDef.drumLane == 'hat' &&
+          hatHoldOpensSticky(
+            downFrac: f.downFrac,
+            frac: f.frac,
+            slop: s._area.height <= 0 ? 0 : kBandSlopPx / s._area.height,
+          );
+      final tone = opens ? Color.lerp(base, Colors.white, 0.55)! : base;
+      final ring = Rect.fromCircle(center: origin, radius: 38);
+      c.drawCircle(
+        origin,
+        38,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 4
+          ..color = _alpha(Colors.white, 0.14),
+      );
+      c.drawArc(
+        ring,
+        -math.pi / 2,
+        2 * math.pi * charge,
+        false,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 4 + 3 * charge
+          ..color = _alpha(tone, 0.95),
+      );
+      final tipAng = -math.pi / 2 + 2 * math.pi * charge;
+      c.drawCircle(
+        origin + Offset(math.cos(tipAng), math.sin(tipAng)) * 38,
+        3 + 2 * charge,
+        Paint()..color = _alpha(Colors.white, 0.9),
+      );
+      if (opens && charge > 0.4) {
+        final tp = TextPainter(
+          text: TextSpan(
+            text: 'OPEN',
+            style: TextStyle(
+              color: _alpha(Colors.white, 0.4 + 0.5 * charge),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.5,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(c, Offset(origin.dx - tp.width / 2, origin.dy + 44));
+      }
+    }
+    // 롤이 도는 동안 — 격자(박)마다 손가락 밑이 깜빡이고, 밀어서 세지는 눈금이 뜬다.
+    if (f.rolled) {
+      final at = f.flashAt;
+      if (at != null) {
+        final diff = now.difference(at).inMilliseconds;
+        if (diff >= 0 && diff < 90) {
+          final k = 1 - diff / 90;
+          c.drawCircle(origin, 30 + 8 * (1 - k), Paint()..color = _alpha(base, 0.5 * k));
+          c.drawCircle(
+            origin,
+            34 + 10 * (1 - k),
+            Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 2
+              ..color = _alpha(Colors.white, 0.5 * k),
+          );
+        }
+      }
+      _crescendo(c, size, f, base);
+    }
+  }
+
+  /// 롤 크레셴도 눈금 — 손가락에서 오른쪽으로 폭의 1/4·2/4 자리에 점 둘. 지나간 만큼 켜진다.
+  void _crescendo(Canvas c, Size size, _Finger f, Color base) {
+    final q = size.width / 4;
+    if (q <= 0 || f.downX + q > size.width - 8) return; // 오른쪽 끝이라 밀 자리가 없다
+    final y = f.downY + 64 > size.height - 16 ? f.downY - 64 : f.downY + 64;
+    final x1 = math.min(f.downX + 2 * q, size.width - 8);
+    c.drawLine(
+      Offset(f.downX, y),
+      Offset(x1, y),
+      Paint()
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 3
+        ..color = _alpha(Colors.white, 0.22),
+    );
+    for (var i = 1; i <= 2; i++) {
+      final x = f.downX + i * q;
+      if (x > size.width - 8) break;
+      final on = f.rollBump >= i;
+      c.drawCircle(
+        Offset(x, y),
+        on ? 7 : 5,
+        Paint()..color = on ? _alpha(base, 0.95) : _alpha(Colors.white, 0.35),
+      );
+    }
+    final cx = f.curX.clamp(f.downX, x1).toDouble();
+    c.drawCircle(Offset(cx, y), 4, Paint()..color = _alpha(Colors.white, 0.85));
+  }
+
+  /// 스웰 — 그은 만큼 아래에서 베일이 차오르고, 손가락 자리에서 지금 자리까지 빛줄기가 선다.
+  void _swell(Canvas c, Size size, _Finger f, Color base) {
+    final travel = size.height * kSwellTravel;
+    if (travel <= 0) return;
+    final up = ((f.downY - f.curY - kSwellDeadPx) / travel).clamp(0.0, 1.0);
+    final vh = size.height * 0.5 * up;
+    if (vh > 1) {
+      final rect = Rect.fromLTWH(0, size.height - vh, size.width, vh);
+      c.drawRect(
+        rect,
+        Paint()
+          ..shader = LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [_alpha(base, 0), _alpha(base, 0.24)],
+          ).createShader(rect),
+      );
+    }
+    final from = Offset(f.downX, f.downY), to = Offset(f.curX, f.curY);
+    c.drawLine(
+      from,
+      to,
+      Paint()
+        ..strokeCap = StrokeCap.round
+        ..strokeWidth = 3 + 5 * up
+        ..color = _alpha(base, 0.30 + 0.5 * up),
+    );
+    // 「위로 그으세요」 쐐기 — 아직 안 그었을 때 더 또렷이 떠 있다.
+    _chevronV(
+      c,
+      Offset(f.curX, f.curY - 46),
+      9,
+      1,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..strokeWidth = 4
+        ..color = _alpha(Colors.white, 0.75 - 0.5 * up),
+    );
+  }
+}
+
+/// 코드 단계의 바닥 그림 — 좌우 세 띠(긴장·그대로·해결)와 위아래 두 구역(화려·담백), 그리고
+/// **맥박 치는 쐐기**로 「이 방향으로 치면 뭔가 달라진다」를 보여 준다. 탭한 순간엔 그 구역이 번쩍한다.
+class _ChordZonePainter extends CustomPainter {
+  final _DoodlePlayViewState s;
+  _ChordZonePainter(this.s, Listenable repaint) : super(repaint: repaint);
+
+  @override
+  bool shouldRepaint(covariant _ChordZonePainter old) => true;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final now = DateTime.now();
+    final w = size.width, h = size.height;
+    if (w <= 0 || h <= 0) return;
+    final third = w / 3;
+    final splitY = kChordColorSplit * h;
+    final landed = s._curDir();
+    var flash = 0.0;
+    final fa = s._flashAt;
+    if (fa != null) {
+      final ms = now.difference(fa).inMilliseconds;
+      if (ms >= 0 && ms < _DoodlePlayViewState._kZoneFlashMs) {
+        flash = 1 - ms / _DoodlePlayViewState._kZoneFlashMs;
+      }
+    }
+    final holding = s._fingers.values.where((f) => !f.swiped).toList();
+    final topOn = holding.any((f) => f.color == 1), botOn = holding.any((f) => f.color == 0);
+
+    // 위·아래 두 구역 — 누른 쪽이 밝고, 탭 순간엔 번쩍한다.
+    final topA = (topOn ? 0.05 : 0.0) + (s._flashColor == 1 ? 0.10 * flash : 0);
+    final botA = (botOn ? 0.05 : 0.0) + (s._flashColor == 0 ? 0.10 * flash : 0);
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, splitY), Paint()..color = _alpha(Colors.white, topA));
+    canvas.drawRect(
+      Rect.fromLTWH(0, splitY, w, h - splitY),
+      Paint()..color = _alpha(Colors.white, botA),
+    );
+
+    // 좌·우 띠 — 바깥 가장자리가 진하고 안쪽으로 옅어진다. 착지 방향 쪽은 더 진하다.
+    void band(Rect r, Color tone, bool leftSide, bool on, bool flashing) {
+      final edgeA = (on ? 0.32 : 0.15) + (flashing ? 0.30 * flash : 0);
+      canvas.drawRect(
+        r,
+        Paint()
+          ..shader = LinearGradient(
+            begin: leftSide ? Alignment.centerLeft : Alignment.centerRight,
+            end: leftSide ? Alignment.centerRight : Alignment.centerLeft,
+            colors: [_alpha(tone, edgeA), _alpha(tone, 0.02)],
+          ).createShader(r),
+      );
+    }
+
+    band(Rect.fromLTWH(0, 0, third, h), _DoodlePlayViewState._kCool, true, landed < 0,
+        s._flashDir < 0);
+    band(Rect.fromLTWH(w - third, 0, third, h), _DoodlePlayViewState._kWarm, false, landed > 0,
+        s._flashDir > 0);
+    if (s._flashDir == 0 && flash > 0) {
+      canvas.drawRect(
+        Rect.fromLTWH(third, 0, third, h),
+        Paint()..color = _alpha(Colors.white, 0.06 * flash),
+      );
+    }
+
+    // 경계선 — 위(화려)/아래(담백).
+    canvas.drawLine(
+      Offset(0, splitY),
+      Offset(w, splitY),
+      Paint()
+        ..strokeWidth = 2
+        ..color = _alpha(Colors.white, 0.22),
+    );
+
+    // 맥박 치는 쐐기 — 바깥으로 흘러가며 「이쪽으로」를 가리킨다. 안 친 사이에는 옅게, 착지한 쪽은 진하게.
+    final phase = (now.millisecondsSinceEpoch % 1200) / 1200.0;
+    void chevrons(bool leftSide, Color tone, bool strong) {
+      final sign = leftSide ? -1 : 1;
+      for (var i = 0; i < 3; i++) {
+        final p = (phase + i / 3) % 1.0;
+        final x0 = leftSide ? third * 0.95 : w - third * 0.95;
+        final x1 = leftSide ? third * 0.5 : w - third * 0.5;
+        final x = x0 + (x1 - x0) * p;
+        final a = math.sin(math.pi * p) * (strong ? 0.85 : 0.38);
+        _chevron(
+          canvas,
+          Offset(x, h * 0.5),
+          10,
+          sign,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round
+            ..strokeWidth = 4
+            ..color = _alpha(tone, a),
+        );
+      }
+    }
+
+    chevrons(true, _DoodlePlayViewState._kCool, landed < 0);
+    chevrons(false, _DoodlePlayViewState._kWarm, landed > 0);
+
+    // 위·아래 화살 — 경계선 바로 위는 위(화려, 반짝), 아래는 아래(담백).
+    final pulse = 0.5 + 0.5 * math.sin(now.millisecondsSinceEpoch / 300);
+    final vp = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..strokeWidth = 4;
+    // 가운데 패드의 글자를 안 가리게 양옆에 한 쌍씩.
+    for (final dx in const [-72.0, 72.0]) {
+      _chevronV(canvas, Offset(w / 2 + dx, splitY - 30 - 4 * pulse), 10, 1,
+          vp..color = _alpha(Colors.white, topOn ? 0.8 : 0.22 + 0.16 * pulse));
+      _chevronV(canvas, Offset(w / 2 + dx, splitY + 30 + 4 * pulse), 10, -1,
+          vp..color = _alpha(Colors.white, botOn ? 0.8 : 0.22 + 0.16 * pulse));
+    }
   }
 }
