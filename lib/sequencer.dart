@@ -556,6 +556,7 @@ class SceneSequencer {
     Transport tr,
     AudioClient host, {
     bool restart = false,
+    double startDelaySec = 0,
   }) {
     final b = build(p, tr, reps: _loopReps(p), afterFill: true);
     host.configureBuses(b.busNames);
@@ -566,6 +567,7 @@ class SceneSequencer {
       b.totalSec,
       restart: restart,
       unitSec: b.loopSec,
+      startDelaySec: startDelaySec,
     );
     return b;
   }

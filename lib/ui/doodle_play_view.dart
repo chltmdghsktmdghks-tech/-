@@ -37,31 +37,31 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../audio_isolate.dart';
+import '../doodle_chords.dart';
+import '../doodle_gestures.dart';
 import '../edit_ops.dart' show DrumOps;
+import '../engine.dart' show boomTailFor;
+import '../genre_mix.dart' show kGenreDuck;
 import '../genres.dart' show genreDef;
-import '../live_ops.dart' show beatsToSend, metroBatch;
+import '../live_ops.dart' show MetTick, beatsToSend, metroBatch;
 import '../meter.dart';
 import '../patterns.dart' show NotePatternDef;
 import '../prog_ops.dart' show ProgSlot, kMaxDegree;
 import '../project.dart';
 import '../sequencer.dart';
-import '../synth.dart' show kPartLive;
+import '../synth.dart' show kPartChord, kPartLive;
 import '../tap_rec.dart';
 import '../theory.dart'
     show
         ChordSpec,
         MusicKey,
-        buildChordText,
         chordMidiOf,
         degreeFreq,
-        diatonicChords,
+        genreChordType,
         guitarChordMidi,
-        invertChord,
-        kChordTypeIntervals,
         midiFreq,
-        parseChordText,
-        scaleOf,
-        voicingDegreeLabels;
+        voiceLead;
+import 'design.dart' show DS;
 import 'editor_view.dart';
 import 'play_head.dart';
 
@@ -126,11 +126,18 @@ const List<int> kDoodleBarChoices = [2, 4, 8];
 /// Doodle Play 화면을 전체 화면으로 연다. 장르는 **이미 골라서 적용된 뒤**라고
 /// 가정한다(호출부가 `project.setGenre(...)` 까지 마친다) — 이 위젯은 드럼
 /// 진행만 맡는다.
+///
+/// [initialBars] — 진입 화면(`doodle_setup_sheet.dart`)에서 사용자가 미리
+/// 고른 판 길이(2·4·8). 주면 씬 길이로 갈무리하는 [_pickBars] 대신 **이 값을
+/// 그대로** 쓴다 — 사용자가 "8마디로 시작"을 골랐는데 지금 씬이 짧다고 말없이
+/// 2마디로 잘리면 고른 것이 무시된 꼴이 된다. `kDoodleBarChoices` 밖의 값이
+/// 넘어와도(방어적으로) 가까운 쪽으로 갈무리한다.
 Future<void> openDoodlePlay(
   BuildContext context, {
   required Project project,
   required Transport transport,
   required AudioClient? host,
+  int? initialBars,
 }) {
   return Navigator.of(context).push(
     MaterialPageRoute<void>(
@@ -139,6 +146,7 @@ Future<void> openDoodlePlay(
         project: project,
         transport: transport,
         host: host,
+        initialBars: initialBars,
       ),
     ),
   );
@@ -148,11 +156,15 @@ class DoodlePlayView extends StatefulWidget {
   final Project project;
   final Transport transport;
   final AudioClient? host;
+
+  /// 진입 화면에서 미리 고른 판 길이. null 이면 여태처럼 씬 길이에서 갈무리한다.
+  final int? initialBars;
   const DoodlePlayView({
     super.key,
     required this.project,
     required this.transport,
     required this.host,
+    this.initialBars,
   });
 
   @override
@@ -180,6 +192,12 @@ class _Finger {
   /// 8px 넘게 움직였나 — 움직였으면 「톡」(스타카토)이 아니다.
   bool moved = false;
 
+  /// 지금 손가락의 세로 위치(0=위, 1=아래) — 하이햇 롤 밀도를 **롤 도중에도** 따라간다.
+  double frac;
+
+  /// 하이햇 롤이 지금 8분(성긴)인가 — 바뀌는 순간에만 손끝으로 알리려고 든다.
+  bool? hatSparse;
+
   /// 지금 머무는 좌우 구역(0~3). 넘어가면 미끄러뜨리기다.
   int zone;
 
@@ -203,6 +221,18 @@ class _Finger {
   /// "방금 울렸다"로 보고 패드를 깜빡인다(`_rollFlashing`).
   DateTime? flashAt;
 
+  /// 지금 손가락의 가로 위치 — 롤 크레셴도(밀수록 세기 상승)가 롤 도중에도 따라간다.
+  double curX;
+
+  /// 킥을 **홀드 붐**(`drumHoldOn`)으로 잡고 있나 — 떼는 순간 `drumHoldOff` 로 꼬리를 놓는다.
+  bool boomHeld = false;
+
+  /// 하이햇이 이 손가락으로 **오픈**으로 넘어갔나(한 번만 울린다).
+  bool openFired = false;
+
+  /// 패드/스트링 스웰을 걸고 있는 손가락인가 — 움직일 때마다 `setSwell`, 뗄 때 되돌린다.
+  bool swell = false;
+
   _Finger({
     required this.pad,
     required this.downX,
@@ -211,7 +241,41 @@ class _Finger {
     required this.vel,
     required this.zone,
     required this.step,
-  });
+    this.frac = 0.5,
+  }) : curX = downX;
+}
+
+/// 한 판을 칠 때 칸별로 모은 손짓(세기·음 고르기·미끄러짐·톡) — 판을 적을 때 쓴다.
+class _TakeMaps {
+  final Map<int, int> vel, tone;
+  final Set<int> glide, stac;
+  const _TakeMaps(this.vel, this.tone, this.glide, this.stac);
+
+  /// 지금 값의 **복사본** — 판마다 원본이 비워지므로 간직할 땐 복사해야 한다.
+  factory _TakeMaps.copyOf(
+    Map<int, int> vel,
+    Map<int, int> tone,
+    Set<int> glide,
+    Set<int> stac,
+  ) => _TakeMaps(Map.of(vel), Map.of(tone), Set.of(glide), Set.of(stac));
+}
+
+/// 적어 둔 베이스 한 판 — 친 칸들 + 손짓.
+class _BassTake {
+  final List<TapHit> hits;
+  final _TakeMaps maps;
+  const _BassTake(this.hits, this.maps);
+}
+
+/// 친 자리에서 퍼지는 물결 한 개(화면 이펙트 전용 — 판정·소리와 무관).
+class _Ripple {
+  final Offset at;
+  final int vel;
+  final DateTime born;
+
+  /// 롤로 넘어간 순간의 큰 물결인가(한 방과 구분해서 보여 준다).
+  final bool roll;
+  const _Ripple(this.at, this.vel, this.born, {this.roll = false});
 }
 
 class _DoodlePlayViewState extends State<DoodlePlayView> {
@@ -225,6 +289,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   late final Track _bassTrack;
   late final String _bassPatternName;
   List<List<Object?>> _bassNotes = [];
+
+  /// 마지막으로 **적은** 베이스 한 판의 리듬·손짓 — 코드 진행이 바뀌면 이걸로 음높이만 다시 얹는다.
+  _BassTake? _bassSnap;
 
   late final Track _chordTrack;
   late final String _chordPatternName;
@@ -260,6 +327,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   final Set<int> _keptStages = {};
 
   final Set<int> _metSent = {};
+
+  /// 판 끝 쪽에서 **다음 판 머리 박**을 미리 잡아 둔 것(다음 판 기준 번호).
+  /// 판이 넘어가면 이것이 그대로 `_metSent` 가 된다(같은 박을 두 번 안 보내려고).
+  final Set<int> _metNext = {};
   double _metLastNow = 0;
 
   /// 이 판이 몇 마디인가 — **씬 길이를 따라간다**(2·4·8). `initState` 가
@@ -282,6 +353,23 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 이 화면은 빈 씬에서 시작해야 하지만(사용자 지시), 남의 가락을 뺏으면 안 된다.
   final Map<String, bool> _priorMute = {};
 
+  /// 들어올 때의 **원래 음색·킷**(트랙 id → 값) — 순서 화면에서 악기를 바꿨는데 그 단계를
+  /// 씬에 남기지 않고 나가면 되돌린다(`dispose`). 드럼 트랙은 킷을 든다.
+  final Map<String, String> _origVoice = {};
+
+  /// 마지막으로 치는 자리의 크기 — 롤 도중 크레셴도가 폭(1/4 단위)을 재려고 쓴다.
+  Size _area = Size.zero;
+
+  /// 들어올 때의 **원래 클립**(트랙 id → 패턴 이름) — 확정 없이 나가면 되돌린다.
+  /// `initState` 가 드럼·베이스·코드 클립을 빈 패턴으로 갈아 끼우므로, 안 챙기면
+  /// 「두드려서 채우기」로 기존 곡에 들어갔다 그냥 나오는 것만으로 세 트랙이 사라진다.
+  final Map<String, String?> _origClip = {};
+  late final Scene _origScene;
+
+  /// 씬에 **실제로 남긴** 단계들 — 「사용하기」(`_keep`)나 진행 표시로 건너뛰며
+  /// 치던 것을 닫은 것(`_gotoStage`). 이 단계의 악기 종류는 나갈 때 되돌리지 않는다.
+  final Set<int> _savedStages = {};
+
   /// 마지막 4박 피드백을 한 번만 울리게(같은 박에서 여러 번 안 떨게).
   int? _lastHapticBeat;
 
@@ -301,28 +389,39 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// HOLD 중인가 — 화면 표시에 쓴다.
   bool get _pressed => _fingers.values.any((f) => !f.swiped);
 
-  /// 코드 자리바꿈(전위) — 0=기본형(135), 1=1전위(351), 2=2전위(531).
-  /// 위로 쓸면 다음 전위로, 계속 쓸면 다시 처음으로 돈다(사용자 지적,
-  /// 2026-09-24: "옥타브를 왜 쓰니 보이싱을 바꾸라고"). 드럼은 안 쓴다.
-  int _voicing = 0;
+  // ── 코드 기믹 (2026-09-29 (12)) ──
+  //
+  // 탭 = 리듬. 어느 코드가 울리는지는 **마디마다 미리 깔린 진행**(`_plan`)이 정한다.
+  // 좌우(X): 한 마디의 **착지(마지막) 탭**이 있던 쪽이 **다음 마디**를 그 방향으로 한 걸음
+  // 갈아 끼운다(왼=긴장, 오=해결). 상하(Y): 같은 자리 코드의 **색**(밝기).
+  // 전위(자리바꿈) 쓸기는 없앴다 — 세로가 색이 됐고, 화음도 늘 기본형이다.
 
-  /// 방금 낸 화음의 음 개수 — 배지에 몇 자리(135/1357/…)를 적을지 정한다.
-  int _chordToneCount = 3;
+  /// 이번 세션에 깔아 둔 기본 진행(매번 다르게)과 이번 판의 진행 상태. 규칙은
+  /// `DoodleChordPlan`(시험이 직접 돌린다) — 화면은 손짓만 넘긴다.
+  late DoodleChordPlan _cp;
+  List<DoodleChordPick> get _basePlan => _cp.base;
 
-  /// step → 그 칸을 쳤을 때의 [_voicing] 값. **소리와 기록이 같은 자리바꿈을
-  /// 쓰게 하는 자리다** — `_chordDown`(연주)과 `buildChordPattern`(재생)이
-  /// 둘 다 `invertChord` 하나만 쓰게 만들려면, 재생 쪽도 그 칸을 칠 때
-  /// 실제로 어떤 전위였는지 알아야 한다(마지막에 딱 하나로 굳혀 전체에
-  /// 씌우면, 녹음 도중 전위를 바꾼 경우 소리와 기록이 갈린다).
-  final Map<int, int> _voicingOf = {};
+  final math.Random _rng = math.Random();
 
-  /// 방금 친 순간(화면 이펙트용) — null 이면 안 친 상태.
-  DateTime? _hitAt;
+  /// 방금 친 코드 이름·가장 최근 좌우 방향 — 은은한 힌트(색·화살표)와 이름표용.
+  ChordSpec? _lastSpec;
+  int _lastDir = 0;
 
-  /// 방금 친 세기(1~3) — 탭 물결(`_hitRipples`)의 크기·진하기를 여기에 맞춘다.
-  /// 세게 칠수록 물결이 크고 진하게 퍼진다(사용자 지시, 이번 배치: "친
-  /// 세기에 따라 물결 크기·진하기가 다르게").
-  int _hitVel = 2;
+  /// **착지 탭**(이 마디에서 마지막으로 친 탭)의 마디 번호·화면 자리. 마디가 바뀌면
+  /// (`_landBar != 지금 마디`) 표시가 사라진다 — 새 마디는 아직 착지가 없다.
+  int _landBar = -1;
+  Offset? _landPos;
+
+  /// 앞에 울린 코드의 자리(MIDI) — `voiceLead` 로 **공통음을 살려 잇는다**.
+  /// 재생(`buildChordPattern`)이 같은 함수로 이으므로 친 소리와 재생이 같은 자리로 난다.
+  List<int> _prevVoiced = const [];
+
+  /// 친 자리마다 하나씩 퍼지는 타격 물결 — **손가락이 닿은 그 자리**에서
+  /// 퍼진다(감사 2026-09-29: 예전엔 화면 한가운데 패드에서만 퍼져서 어디를 쳐도
+  /// 같은 자리가 반짝였고, 패드를 안 그리는 베이스는 물결이 아예 없었다).
+  /// 크기·진하기는 세기(1~3)를 따른다. 시계(`_tick`)가 30ms마다 다시 그리므로
+  /// 따로 애니메이션 장치를 두지 않고 친 시각과 지금의 차로 셈한다.
+  final List<_Ripple> _ripples = [];
 
   /// 사다리 칸별 **마지막으로 지나온 시각** — 베이스에서 미끄러뜨릴 때
   /// (`_slideTo`) 남기는 궤적이다. [_kLadderTrailMs] 안이면 그 칸이 잠깐
@@ -345,22 +444,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 한 화음에 낼 수 있는 음 수 — 9화음(5음)까지.
   static const int _kMaxChordTones = 5;
 
-  /// 세로로 이만큼(논리픽셀) 넘게 움직이면 음이 아니라 쓸기로 본다.
-  static const double _kSwipeSlop = 28;
-
-  /// **쓸기는 닿은 뒤 이 시간 안에 일어난 것만** 본다.
-  ///
-  /// 예전엔 시간 제한이 없어서, 베이스를 1~2초 길게 잡고 있는 동안 손가락이
-  /// 천천히 36px 흘러내리기만 해도 쓸기로 읽혀 `holdOff` + `_rec.cancel` 이
-  /// 돌았다 — **그 음이 소리도 기록도 없이 사라지고 옥타브까지 바뀐다.**
-  /// 리듬을 타는 중에 손이 미끄러지는 건 예외가 아니라 기본값이다.
-  /// 문턱을 36→28 로 낮추는 대신 시간창과 방향비를 걸었다(문턱만 올리면
-  /// 이번엔 옥타브 바꾸기가 안 된다).
-  static const int _kSwipeWindowMs = 160;
-
-  /// 세로가 가로보다 이만큼 커야 쓸기 — 비스듬한 손짓은 미끄러뜨리기로 본다.
-  static const double _kSwipeRatio = 1.6;
-
   /// 이 시간 안에 떼면 **톡**(스타카토). 시간 축이라 다른 손짓과 안 겹친다.
   static const int _kStaccatoMs = 90;
 
@@ -368,13 +451,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   static const double _kStaccatoSlop = 8;
 
   /// 드럼에서 이만큼 붙이고 있으면 **롤**이 돈다.
-  static const int _kRollAfterMs = 220;
+  static const int _kRollAfterMs = 180;
+
+  /// 롤 충전 링을 **보이기 시작하는 시각**(ms) — 톡 치는 손가락(보통 60~90ms)에는
+  /// 링이 안 깜빡이게, 「꾹」이 시작된 뒤부터만 차오른다(감사 2026-09-29: 220→180ms
+  /// 전체에 걸쳐 그리면 모든 탭마다 링이 번쩍여 "롤 예고"가 잡음이 된다).
+  static const int _kRollShowMs = 70;
 
   /// 롤을 앞질러 예약하는 창 — 길면 뗐는데 계속 쳐서 "화면이 안 먹는다"가 된다.
   static const double _kRollAheadSec = 0.12;
-
-  /// 코드 두께 — 첫 손가락 뒤 이 시간 안에 닿은 손가락까지 **한 화음**으로 센다.
-  static const int _kChordGroupMs = 120;
 
   /// 한 번에 받을 손가락 수 — `TapRecorder` 의 판이 넷이라 거기에 맞춘다.
   static const int _kMaxFingers = 4;
@@ -399,9 +484,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// **톡** 쳐서 짧게 끊은 칸 — 길이를 한 칸으로 줄인다.
   final Set<int> _staccatoAt = {};
 
-  /// 그 칸의 **화음 종류**(칸 → 'min7' 같은 코드 글). null 이면 3화음 그대로.
-  final Map<int, String> _chordTypeOf = {};
-
   /// **꾹 눌러 롤**로 들어온 드럼 칸들 — 사람이 친 게 아니라 기계가 낸
   /// 정확한 시각이라 `TapRecorder`(사람 반응 지연을 되돌리는 계산)를 안 거친다.
   final Set<int> _rollSteps = {};
@@ -412,14 +494,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   List<ProgSlot> _priorProg = const [];
   int _priorProgSteps = 0;
 
-  /// 코드 두께 — 지금 모으고 있는 화음의 첫 손가락 시각·칸·손가락 수.
-  DateTime? _chordFirstAt;
-  int _chordFirstStep = -1;
-  int _chordFingers = 0;
-
-  /// 이 화면이 **내려가지 못하게 막는** 버퍼 바닥(프레임) — 48kHz에서 64ms.
-  /// 씬 루프를 틀어 놓고 도는 화면이라 급식이 마르면 안 된다(위 `initState`).
-  static const int _kDoodleAheadFloor = 3072;
+  /// 이 화면이 쓰는 앞질러 만드는 양(프레임) — 48kHz 에서 32ms. **탭→소리 지연의
+  /// 가장 큰 몫**이다(귀에 닿기까지 이만큼 큐에 쌓여 있다).
+  ///
+  /// 2026-09-29 (11): 3072(64ms) → 1536(32ms). 앞 회차(2560)는 **효과가 없었다** —
+  /// 예전 코드가 `prevAhead < 바닥` 일 때만 값을 바꿨는데 기본 `aheadFrames` 가
+  /// 3072 라 2560 바닥은 한 번도 안 걸렸다. 이제는 무조건 이 값으로 맞춘다.
+  /// 실기기에서 찢어지면 이 한 줄을 올린다: 1536 → 2048(43ms) → 2560(53ms) → 3072(64ms).
+  static const int _kDoodleAhead = 1536;
 
   /// 손이 화면에 닿고 앱이 그것을 받기까지 걸리는 시간(초).
   ///
@@ -482,12 +564,35 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // **`SceneSequencer.sceneLoopBars` 를 쓴다** — `Project.loopBarsOf` 는
     // `audible(t)`(음소거·빈 클립)를 안 보는데 실제 루프를 만드는 `build()` 는
     // 본다. 규칙이 다른 두 셈을 쓰면 반드시 어긋난다(이 저장소가 여러 번 겪었다).
-    _bars = _pickBars(SceneSequencer.sceneLoopBars(p, p.currentScene));
+    // 진입 화면에서 고른 값이 있으면 **그걸 우선한다** — 없을 때만 씬 길이로
+    // 갈무리한다(여태 하던 대로, `scene_view.dart` 의 "두드려서 채우기"처럼
+    // 진입 화면 없이 바로 여는 길도 있다).
+    final ib = widget.initialBars;
+    _bars = ib != null
+        ? _pickBars(ib)
+        : _pickBars(SceneSequencer.sceneLoopBars(p, p.currentScene));
+    _cp = DoodleChordPlan(
+      doodleBasePlan(
+        mode: widget.transport.mode,
+        bars: _bars,
+        genre: p.genre,
+        rng: _rng,
+      ),
+      mode: widget.transport.mode,
+      genre: p.genre,
+      rng: _rng,
+    );
     final ts = DateTime.now().millisecondsSinceEpoch;
+    p.quietly(() {
+    // 클립을 갈아 끼우는 동안(그리고 나가서 되돌리기 전까지) 자동 저장이 이
+    // **임시 상태**를 파일에 쓰지 못하게 막는다(`Store.saveNow`).
+    p.transientEdit = true;
+    _origScene = p.scene;
     _drumTrack = p.tracks.firstWhere(
       (t) => t.type == 'drum',
       orElse: () => p.tracks.first,
     );
+    _origClip.putIfAbsent(_drumTrack.id, () => _origScene.clips[_drumTrack.id]);
     _drumPatternName = 'doodle_drum_$ts';
     _ops = DrumOps.read(null);
     p.putUserPattern(
@@ -503,6 +608,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       (t) => t.type == 'bass',
       orElse: () => p.tracks.length > 1 ? p.tracks[1] : p.tracks.first,
     );
+    _origClip.putIfAbsent(_bassTrack.id, () => _origScene.clips[_bassTrack.id]);
     _bassPatternName = 'doodle_bass_$ts';
     p.putUserPattern(
       'bass',
@@ -516,6 +622,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       (t) => t.type == 'chord',
       orElse: () => p.tracks.length > 2 ? p.tracks[2] : p.tracks.first,
     );
+    _origClip.putIfAbsent(_chordTrack.id, () => _origScene.clips[_chordTrack.id]);
     _chordPatternName = 'doodle_chord_$ts';
     p.putUserPattern(
       'chord',
@@ -523,6 +630,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       note: NotePatternDef(_chordPatternName, _bars, _bars, const [], spb: p.spb),
     );
     p.setClip(_chordTrack, _chordPatternName);
+    _origVoice[_drumTrack.id] = _drumTrack.kit;
+    _origVoice[_bassTrack.id] = _bassTrack.voice;
+    _origVoice[_chordTrack.id] = _chordTrack.voice;
 
     // ── 씬을 **완전히 빈 상태**로 시작한다 (사용자 지시, 2026-09-22) ──
     // "두들플레이 시작할 때 멜로디 넣지마 씬 아무것도 없는상태에서 해야지
@@ -541,17 +651,27 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       _priorMute[t.id] = t.mute;
       t.mute = true;
     }
+    });
+    // 조용히 바꾼 것은 첫 프레임이 끝난 뒤 알린다(만드는 중에 알리면 터진다).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) p.poke();
+    });
 
     final h = widget.host;
     _clock.attach(h);
     if (h != null) {
       final b = SceneSequencer.playLoop(p, widget.transport, h);
+      _applyPump(h); // `playLoop` 이 킥 덕 대상을 "전부"로 되돌렸다 — 다시 건다.
       widget.transport.playing = true;
       widget.transport.songLoop = false;
       _loopSec = b.loopSec;
       _loopBars = b.loopBars;
       h.setSongMode(false); // 손가락에 붙어야 한다
-      // ── 버퍼를 **내리지 않고 바닥만 올린다** (2026-09-21) ──
+      // ── (2026-09-29 (11)) 이제 **올리기만 하지 않고 정해 둔 값으로 맞춘다** ──
+      // 아래 2026-09-21 설명은 "내리지 말자"였으나, 탭 지연이 최우선이라 뒤집었다.
+      // 그때 근거(급식 지체 20~36ms + 장치 1024)는 여전히 위험 요인이다 —
+      // 찢어짐은 실기기에서 보고 `_kDoodleAhead` 를 올려 맞춘다.
+      // ── (원문) 버퍼를 **내리지 않고 바닥만 올린다** (2026-09-21) ──
       //
       // 여기서 2048(43ms)로 낮췄었다. "눌러도 늦게 난다"를 버퍼로 때우려던
       // 것인데, 늦게 나던 진짜 이유는 버퍼가 아니라 **메트로놈이 예약 시각을
@@ -563,7 +683,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // 「박자 안 맞음」을 오히려 만든다.
       final prevAhead = h.aheadFrames;
       _prevAhead = prevAhead;
-      if (prevAhead < _kDoodleAheadFloor) h.setAhead(_kDoodleAheadFloor);
+      if (prevAhead != _kDoodleAhead) h.setAhead(_kDoodleAhead);
       _buffered = h.aheadFrames;
       // 예약 시각 보정은 **실측 버퍼**로 한다(목표치와 다를 수 있다).
       _statsSub = h.statsStream.listen((s) {
@@ -576,8 +696,28 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _timer = Timer.periodic(const Duration(milliseconds: 30), (_) => _tick());
   }
 
+  /// **킥 사이드체인 펌핑**(하우스 계열만 자동 ON, `setSidechainPump`). `playLoop`/`refreshLoop`/
+  /// `setGenreMix` 는 킥 덕의 대상을 "전부"로 되돌리므로 **그 뒤마다** 다시 건다.
+  /// 펌핑 장르가 아니면 `playLoop` 이 걸어 둔 장르 기본 덕(사용자 손잡이 우선) 그대로 둔다 —
+  /// 여기서 0 으로 꺼 버리면 트랩 등의 원래 비켜 주기가 두들에서만 사라진다.
+  void _applyPump(AudioClient h) {
+    final p = widget.project;
+    final g = p.genre;
+    h.setSidechainPump(
+      g.isEmpty ? null : g,
+      offDepth: p.duckAmountOverride ?? kGenreDuck[g] ?? 0,
+    );
+  }
+
+  /// 판을 다시 싣는다 — `refreshLoop` + 펌핑 대상 복구.
+  void _refreshLoop(AudioClient h) {
+    SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+    _applyPump(h);
+  }
+
   /// 순서 정하기 화면에서 "이 순서로 시작"을 눌렀다 — 이제부터 박이 돈다.
   void _startStages() {
+    widget.host?.clearSwell(); // 편성(악기)이 정해졌다 — 미리 듣기로 남은 스웰은 걷는다.
     setState(() => _ordering = false);
     _armStage();
     // 첫 단계도 **씬 머리에서** 시작한다. 씬 루프는 `initState` 의 `playLoop`
@@ -586,6 +726,24 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 세기가 씬 중간에서 시작한다. 단계 전환(`_keep`)과 같은 결로 맞춘다.
     _rewindLoop();
   }
+
+  /// 미리 세기 한 마디(초) — 판 머리를 이만큼 미룬다. 판이 한 마디보다 짧으면 0.
+  double get _leadSec {
+    final s = _meter.clicksPerBar * _beatSec;
+    return (_loopSec > s && _loopBars > 1) ? s : 0;
+  }
+
+  /// 되감은 직후의 (들리는) 위치 — 미리 세기가 판 끝쪽에서 시작한다.
+  double _leadInPos() => leadInStartPos(
+    loopSec: _loopSec,
+    leadSec: _leadSec,
+    bufferedSec: _buffered / 48000.0,
+  );
+
+  /// 미리 세기 첫 박의 판 안 번호 — 판 끝에서 한 마디 앞. 미루기가 없으면 0.
+  int _leadBeat() => _leadSec > 0
+      ? _loopBars * _meter.clicksPerBar - _meter.clicksPerBar
+      : 0;
 
   /// 씬 루프를 **머리(0)로 되감는다** — 새 악기가 씬 처음부터 흐르고 미리
   /// 세기도 거기서 시작하게(사용자 신고, 2026-09-23: "악기 넘어갈 때 처음부터
@@ -597,8 +755,45 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   void _rewindLoop() {
     final h = widget.host;
     if (h == null) return;
-    SceneSequencer.refreshLoop(widget.project, widget.transport, h, restart: true);
-    _clock.reset();
+    // **미리 세기 한 마디를 판의 마지막 마디 자리에 놓는다**(2026-09-29 (14)). 판 머리(0)에서
+    // 되감으면 미리 세기가 0~1마디, 녹음이 1마디째부터라 친 것이 통째로 한 마디 밀려 담겼다.
+    // 판 머리를 한 마디(`_leadSec`) 뒤로 미뤄 카운트가 끝나는 순간 = 판 0 이 되게 한다.
+    SceneSequencer.refreshLoop(
+      widget.project,
+      widget.transport,
+      h,
+      restart: true,
+      startDelaySec: _leadSec,
+    );
+    _applyPump(h);
+    _clock.reset(_leadInPos());
+    // 되감기는 엔진 예약(`clearSchedule`)을 통째로 비운다 — 이미 앞질러 보낸 자(최대
+    // 0.5초 치)도 같이 사라진다. 기록(`_metSent`)을 그대로 두면 「이미 보냈다」로
+    // 읽혀 그 박들이 **영영 안 울린다**(메트로놈 가끔 누락의 원인, 2026-09-29 (11)).
+    _metSent.clear();
+    _metNext.clear();
+    _metLastNow = 0;
+    _sendMetHead(h);
+  }
+
+  /// 되감은 **바로 그 자리(판 머리)** 의 첫 박. 새 판이 렌더 커서에서 시작하므로
+  /// delay 0 으로 같은 자리에 놓는다. 여기서 안 내면 0박은 `gap` 안쪽이라 다시는
+  /// 안 잡힌다. 자가 꺼져야 하는 대목이면(`doodleShouldSendMet`) 내지 않는다.
+  void _sendMetHead(AudioClient h) {
+    final cs = _clockState;
+    if (cs == null || cs.phase == TapPhase.done) return;
+    if (!doodleShouldSendMet(
+      phase: cs.phase,
+      isDrumStage: _stageDef.kind == DoodleKind.drum,
+      drumsConfirmed: _drumsConfirmed,
+    )) {
+      return;
+    }
+    // 되감은 바로 그 자리의 첫 박 — 미리 세기 첫 박은 판 끝에서 한 마디 앞(`_leadBeat`)이다
+    // (`_leadSec` 가 0 이면 예전처럼 판 0박).
+    final beat = _leadBeat();
+    h.batch(metroBatch([MetTick(beat, 0.0)], beatsPerBar: _meter.clicksPerBar));
+    _metSent.add(beat);
   }
 
   @override
@@ -609,11 +804,39 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _clock.dispose();
     final h = widget.host;
     h?.holdOff(-1);
+    h?.clearSwell(); // 패드/스트링 스웰이 남아 다른 화면의 코드 버스를 누르지 않게
+    for (var i = 0; i < _kMaxFingers; i++) {
+      h?.drumHoldOff(_kHoldId + i, tailSec: 0.05);
+    }
     // 재워 뒀던 트랙을 **먼저** 깨운다 — `pushMix` 가 그 상태를 읽어 간다.
     for (final t in widget.project.tracks) {
       final was = _priorMute[t.id];
       if (was != null && t.mute != was) t.mute = was;
     }
+    // 씬에 남기지 않은 악기(확정 안 한 것)는 **원래 클립으로 되돌린다.**
+    final savedKinds = {for (final i in _savedStages) _stages[i].kind};
+    void restore(Track t, DoodleKind k) {
+      if (savedKinds.contains(k) || !_origClip.containsKey(t.id)) return;
+      _origScene.clips[t.id] = _origClip[t.id];
+      if (identical(widget.project.scene, _origScene)) t.pattern = _origClip[t.id];
+    }
+    restore(_drumTrack, DoodleKind.drum);
+    restore(_bassTrack, DoodleKind.bass);
+    restore(_chordTrack, DoodleKind.chord);
+    // 순서 화면에서 바꾼 악기(음색·킷)도 — 그 종류를 씬에 남기지 않았으면 원래대로.
+    void restoreVoice(Track t, DoodleKind k) {
+      final o = _origVoice[t.id];
+      if (savedKinds.contains(k) || o == null) return;
+      if (k == DoodleKind.drum) {
+        t.kit = o;
+      } else {
+        t.voice = o;
+      }
+    }
+    restoreVoice(_drumTrack, DoodleKind.drum);
+    restoreVoice(_bassTrack, DoodleKind.bass);
+    restoreVoice(_chordTrack, DoodleKind.chord);
+    widget.project.endTransientEdit(); // 되돌린 상태를 저장 대상으로 돌려놓는다
     if (h != null) SceneSequencer.pushMix(widget.project, h);
     final prev = _prevAhead;
     if (h != null && prev != null && prev != h.aheadFrames) h.setAhead(prev);
@@ -634,6 +857,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       // 기다리는" 계산을 또 거치면 오히려 판을 한 바퀴 거의 다 돌아야
       // 시작된다(`tap_rec.dart`의 `armedAtHead` 문서 참고).
       armedAtHead: true,
+      startBeat: _loopSec > 0
+          ? _leadInPos() * _loopBars * _meter.clicksPerBar
+          : null,
     );
     // 녹음 전에도 "지금 몇 번째 칸인가"를 알아야 미리 들려주는 소리가 그
     // 자리 코드에 맞는다 — 그래서 녹음기를 미리 만들어 둔다. 실제 담기는
@@ -649,14 +875,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _toneOf.clear();
     _glideAt.clear();
     _staccatoAt.clear();
-    _chordTypeOf.clear();
-    _voicingOf.clear();
+    _resetChordPlan();
     _rollSteps.clear();
-    _chordFirstAt = null;
-    _chordFirstStep = -1;
-    _chordFingers = 0;
-    _hitAt = null;
-    _voicing = 0;
+    _ripples.clear();
     // 잡고 있던 것을 **손가락 수만큼** 놓는다 — `_kHoldId` 하나만 놓으면
     // 두 번째 손가락 이후가 계속 울린다(판마다 +pad 로 쓰기 때문이다).
     for (var i = 0; i < _kMaxFingers; i++) {
@@ -667,9 +888,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     for (var i = 0; i < _kMaxChordTones; i++) {
       widget.host?.holdOff(_kChordId + i);
     }
+    // 잡고 있던 808 킥(홀드 붐)도 놓고, 단계가 바뀌면(편성이 바뀌면) 스웰도 걷는다.
+    for (var i = 0; i < _kMaxFingers; i++) {
+      widget.host?.drumHoldOff(_kHoldId + i, tailSec: 0.05);
+    }
+    widget.host?.clearSwell();
     // 자(메트로놈)가 보낸 기록도 비운다 — 안 비우면 앞 단계에서 이미 보낸
     // 박 번호가 남아 새 단계의 미리 세기 첫 박이 막힐 수 있다.
     _metSent.clear();
+    _metNext.clear();
     _metLastNow = 0;
   }
 
@@ -708,6 +935,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     cs.update(pos * _loopBars * _meter.clicksPerBar);
     if (was != TapPhase.rec && cs.phase == TapPhase.rec) _startRec();
     _maybeHaptic(cs);
+    if (cs.phase == TapPhase.rec && _stageDef.kind == DoodleKind.chord) {
+      final r = _rec;
+      if (r != null) _cp.settleUpTo(_barOf(r.stepOf(pos)));
+    }
     _tickRoll();
     if (cs.phase == TapPhase.done) {
       _finishLap(pos);
@@ -751,7 +982,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 조금씩 뒤로 흔들리는데(`TapClock` 도 같은 이유로 전용 가드를 둔다),
     // 그 미세한 역행까지 「한 바퀴 돌았다」로 읽으면 같은 박을 두 번 보내
     // 플램으로 들린다.
-    if (_metLastNow - nowSec > _loopSec / 2) _metSent.clear();
+    if (_metLastNow - nowSec > _loopSec / 2) {
+      _metSent
+        ..clear()
+        ..addAll(_metNext);
+      _metNext.clear();
+    }
     if (nowSec > _metLastNow) _metLastNow = nowSec;
     final ticks = beatsToSend(
       nowSec: nowSec,
@@ -759,11 +995,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       beatSec: _beatSec,
       sent: _metSent,
       lead: 0.5,
+      wrap: true,
+      sentNext: _metNext,
     );
     if (ticks.isEmpty) return;
     h.batch(metroBatch(ticks, beatsPerBar: _meter.clicksPerBar));
     for (final t in ticks) {
-      _metSent.add(t.beat);
+      (t.next ? _metNext : _metSent).add(t.beat);
     }
   }
 
@@ -807,7 +1045,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 불러도 결과가 같다 — 두 번 부르는 것이 안전하다.
     _commit();
     final h = widget.host;
-    if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+    if (h != null) _refreshLoop(h);
     // 리뷰 화면 진입 — "지금 들려주는 중" 표시를 깜빡이기 시작한다.
     _startReviewBlink();
   }
@@ -828,6 +1066,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           drum: _ops.toDef(_drumPatternName, _bars),
         );
       case DoodleKind.bass:
+        _bassSnap = null;
         _bassNotes = const [];
         widget.project.putUserPattern(
           'bass',
@@ -843,6 +1082,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           note: NotePatternDef(_chordPatternName, _bars, _bars, const [],
               spb: widget.project.spb),
         );
+        // 코드가 비었으니 이미 친 베이스는 기본 진행으로 되돌린다.
+        _repitchBass();
     }
   }
 
@@ -881,7 +1122,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   (List<ProgSlot>, int) _prog() {
     final (prog, steps) = widget.project.readSceneProg();
     if (prog.isNotEmpty) return (prog, steps);
-    return (_priorProg, _priorProgSteps);
+    if (_priorProg.isNotEmpty) return (_priorProg, _priorProgSteps);
+    // 빈 프로젝트로 시작하면 원래 진행이 없다 — 코드를 아직 안 쳤어도 베이스가
+    // 한 음짜리가 되지 않게 **미리 깔아 둔 진행**을 따라 걷게 한다.
+    final spb = widget.project.spb;
+    return ([
+      for (var b = 0; b < _basePlan.length; b++)
+        ProgSlot(_basePlan[b].degree, b * spb, (b + 1) * spb, meter: _meter),
+    ], _basePlan.length * spb);
   }
 
   /// 이 단계의 격자 — **하이햇만 16분**, 나머지는 8분.
@@ -932,25 +1180,36 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   List<List<Object?>> _decorate(
     List<List<Object?>> rows, {
     required bool chord,
+    _TakeMaps? maps,
   }) {
+    // [maps] 를 주면 **그 판을 칠 때 모아 둔 손짓**으로 적는다(베이스 음높이 다시 얹기) —
+    // 안 주면 지금 판의 것.
+    final m = maps ?? _TakeMaps(_velOf, _toneOf, _glideAt, _staccatoAt);
     return [
       for (final r in rows)
         () {
           final step = r[1] as int;
-          final len = _staccatoAt.contains(step) ? 1 : r[2];
-          final vel = _velOf[step] ?? r[3];
+          final len = m.stac.contains(step) ? 1 : r[2];
+          final vel = m.vel[step] ?? r[3];
           if (chord) {
-            final ty = _chordTypeOf[step];
-            final voicing = _voicingOf[step] ?? 0;
-            // **늘 적는다** — 0(기본형)도 값이다. 비워 두면 재생 쪽이 옛
-            // `voiceLead` 자동 전위로 되돌아가, 연주 때 들은 것과 갈린다.
-            return <Object?>[r[0], step, len, vel, ty, null, voicing];
+            // 도수·종류는 **마디 단위**로 정리한다 — 그 마디에 깔린 코드 + 그 마디
+            // **착지 탭**의 색. 탭마다 색이 다르면 한 마디 안에서 들쭉날쭉해진다.
+            final bar = _barOf(step);
+            final pick = _cp.pickAt(bar);
+            final ty = doodleChordText(_key, pick, _cp.colorOf(bar));
+            // 전위 칸은 **비운다** — 재생(`buildChordPattern`)이 `voiceLead` 로 앞 코드와
+            // 공통음을 살려 잇는다. 연주 중에도 같은 함수로 잇는다(`_chordDown`).
+            // 기타를 **톡** 쳐서(뮤트첩) 짧게 끊은 칸은 여리게 적는다 — 재생도 「척」으로 나게.
+            final vel = m.stac.contains(step) && isMuteVoice(_chordTrack.voice)
+                ? kMuteVel
+                : 2;
+            return <Object?>[pick.degree, step, len, vel, ty, null];
           }
           // 낱음 줄(베이스) — **소리 낼 때 쓴 바로 그 함수**로 도수를 구한다.
           // `tapToNotes` 가 적어 둔 `r[0]` 은 좌우·옥타브를 모르는 기본음이다.
           // 여기서 따로 더하면 clamp 순서가 달라져 소리와 갈린다(전에 그랬다).
-          final deg = _writeDegree(step, _toneOf[step] ?? 0);
-          final glide = _glideAt.contains(step) ? 1 : null;
+          final deg = _writeDegree(step, m.tone[step] ?? 0);
+          final glide = m.glide.contains(step) ? 1 : null;
           if (glide == null) return <Object?>[deg, step, len, vel];
           return <Object?>[deg, step, len, vel, glide];
         }(),
@@ -982,6 +1241,31 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 한가운데(세게) 구역의 반지름 — min(폭,높이) 대비.
   /// 화면에 그려지는 190px 동그라미와 같은 크기로 맞춘다.
   static const double _kHardR = 0.24;
+
+  /// 드럼 세기 — 악기마다 축이 다르다(2026-09-29 (12)).
+  ///  · **킥**: 세로 = 고스트(아래, 여리게 1)↔정타(위). 정타의 세기는 가로(오른쪽이 셈, 2~3).
+  ///  · **하이햇**: 세로가 롤 밀도라 세로로 세기를 못 읽는다 → 가로(왼쪽 여리게↔오른쪽 세게).
+  ///  · **스네어**: 여태처럼 한가운데가 세게, 가장자리가 여리게.
+  int _drumVel(Offset at, Size area) {
+    switch (_stageDef.drumLane) {
+      case 'kick':
+        if (area.height > 0 && at.dy / area.height >= _kGhostFrac) return 1;
+        final v = _velFromX(at.dx, area.width);
+        return v < 2 ? 2 : v;
+      case 'hat':
+        return _velFromX(at.dx, area.width);
+      default:
+        return _velFromCenter(at, area);
+    }
+  }
+
+  /// 킥에서 이 세로 위치(0=위, 1=아래)보다 아래를 치면 **고스트**(여리게).
+  static const double _kGhostFrac = 0.68;
+
+  /// 하이햇 롤에서 이 세로 위치보다 아래를 누르고 있으면 **8분**(성긴 비트),
+  /// 위쪽이면 **16분**(촘촘). 롤 도중 위로 밀면 16분으로 올라간다(필인).
+  /// 32분·셋잇단은 못 넣는다 — 드럼 판이 16분 칸 격자라 저장이 안 된다(친 소리 = 적힌 음).
+  static const double _kHatSparseFrac = 0.6;
 
   /// **베이스 전용 세기 — 가로(x)로 읽는다.**
   ///
@@ -1056,6 +1340,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   void _pressDown(PointerDownEvent e, Size area) {
     final pointer = e.pointer;
     final at = e.localPosition;
+    _area = area;
     // **어느 대목이든 소리는 바로 낸다.** 예전엔 녹음(rec) 중이 아니면 여기서
     // 그냥 돌아가서, 대기·미리 세기 동안(길면 6초) 눌러도 소리도 화면도
     // 아무 반응이 없었다 — 사용자에겐 "눌러도 안 되는 화면"으로 보인다.
@@ -1064,13 +1349,30 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // **베이스는 한 손가락만.** 단선율 악기라 두 음이 동시에 찍히면 의도치 않은
     // 화음 베이스가 된다 — 손이 스치거나 무심코 두 손가락으로 짚기만 해도
     // 그랬다(제스처 검수에서 잡음). 사용자 방침도 "웬만하면 한 손가락"이다.
-    // 드럼(두 손 번갈아 연타)·코드(손가락 수가 화음 두께)는 여러 개가 뜻이 있어
-    // 그대로 둔다.
-    final maxFingers = _hasTone ? 1 : _kMaxFingers;
-    if (_fingers.containsKey(pointer) || _fingers.length >= maxFingers) return;
-    final cs = _clockState;
-    final recording = cs != null && cs.phase == TapPhase.rec;
+    // **코드도 한 손가락만**(2026-09-29 (12): 한 엄지 원핸드 — 손가락 수로 코드
+    // 두께를 재던 것을 없앴다). 여럿이 닿으면 **가장 먼저 닿은 하나만** 받는다.
+    // 드럼만 두 손 번갈아 연타가 뜻이 있어 여러 개를 받는다.
+    final maxFingers = (_hasTone || _stageDef.kind == DoodleKind.chord)
+        ? 1
+        : _kMaxFingers;
+    if (_fingers.containsKey(pointer)) return;
+    if (_fingers.length >= maxFingers) {
+      // 막혔다 — 베이스·코드는 한 손가락만 받는다. 아무 반응이 없으면 "안 눌렸나?"
+      // 하고 더 세게 누르게 되므로 손끝으로 "받지 않았다"를 알린다(무반응은
+      // 버그로 친다). 물결은 안 그린다 — 소리가 안 났는데 친 것처럼 보이면 거짓.
+      if (maxFingers == 1) HapticFeedback.heavyImpact();
+      return;
+    }
     final pos = _clock.pos(_loopSec);
+    final cs = _clockState;
+    // 대목 판정을 **이 손가락이 닿은 시각의 위치**로 한 번 더 굴린다 — 30ms 시계 틱이 아직
+    // 미리 세기로 보고 있는 판 머리 바로 뒤 몇 ms 에 친 첫 박이 버려지지 않게(녹음 시작 직후 탭).
+    if (cs != null && !_ordering && !_reviewing && !_allDone && _loopSec > 0) {
+      final was = cs.phase;
+      cs.update(pos * _loopBars * _meter.clicksPerBar);
+      if (was != TapPhase.rec && cs.phase == TapPhase.rec) _startRec();
+    }
+    final recording = cs != null && cs.phase == TapPhase.rec;
     final rec = _rec;
     // 손가락마다 판(pad)을 따로 준다 — 같은 판을 쓰면 두 번째 손가락이
     // 첫 번째가 누르고 있던 것을 닫아 버린다.
@@ -1083,7 +1385,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 베이스는 **세로가 이미 음 높이**(사다리)라 세기를 세로 자리로 못
     // 읽는다. 그래서 **가로**를 쓴다(사용자 지시, 2026-09-24: "가로축으로
     // 세기를 읽어라") — 왼쪽이 여리게, 오른쪽이 세게. 사다리(세로)와 안 겹친다.
-    final vel = _hasTone ? _velFromX(at.dx, area.width) : _velFromCenter(at, area);
+    // 코드는 세기 **균일**(2) — 좌우·상하가 다른 뜻(진행·색)을 가져갔다.
+    final vel = _stageDef.kind == DoodleKind.chord
+        ? 2
+        : (_hasTone ? _velFromX(at.dx, area.width) : _drumVel(at, area));
     final zone = _hasTone ? _rowFromY(at.dy, area.height) : 0;
     final tone = _hasTone ? _kLadderTone[zone] : 0;
     final step = rec?.stepOf(pos) ?? 0;
@@ -1095,6 +1400,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       vel: vel,
       zone: zone,
       step: step,
+      frac: area.height <= 0 ? 0.5 : (at.dy / area.height).clamp(0.0, 1.0),
     );
     _fingers[pointer] = f;
     if (_hasTone) _rowVisitAt[zone] = now; // 사다리 궤적 — 첫 자리도 한 번 밝힌다.
@@ -1105,7 +1411,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     }
     switch (_stageDef.kind) {
       case DoodleKind.drum:
-        widget.host?.drumOn(_drumTrack.kit, _stageDef.drumLane!, vel);
+        final lane = _stageDef.drumLane!;
+        if (lane == 'kick' && doodleBoomKit(_drumTrack.kit)) {
+          // **808 붐** — 누르는 동안 서브가 유지되고, 뗄 때 누른 만큼(`boomTailFor`) 울다 진다
+          // (`_pressUp`). 표본 킷(어쿠스틱·록)은 붐이 합성 킥으로 바뀌므로 한 방만 친다.
+          f.boomHeld = true;
+          widget.host?.drumHoldOn(_kHoldId + pad, _drumTrack.kit, vel);
+        } else {
+          widget.host?.drumOn(_drumTrack.kit, lane, vel);
+        }
         // 타악은 길이가 없다 — 그 자리에 한 칸.
         if (recording) rec?.up(pad, pos);
         // 붙이고 있으면 **롤**이 돈다 — 단, `_canRoll` 인 악기만.
@@ -1118,13 +1432,18 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         f.freq = _bassFreq(step, tone);
         widget.host?.holdOn(_kHoldId + pad, _bassTrack.voice, f.freq, vel);
       case DoodleKind.chord:
-        _chordDown(step, vel, recording: recording, now: now);
+        _chordDown(step, at, area, f, recording: recording);
     }
     _hapticForVel(vel);
-    setState(() {
-      _hitAt = now;
-      _hitVel = vel;
-    });
+    setState(() => _addRipple(at, vel, now: now));
+  }
+
+  /// [at] 에서 퍼지는 타격 물결을 하나 더한다. 오래된 것은 같이 치운다.
+  void _addRipple(Offset at, int vel, {required DateTime now, bool roll = false}) {
+    _ripples.removeWhere(
+      (r) => now.difference(r.born).inMilliseconds > _kHitFx.inMilliseconds,
+    );
+    _ripples.add(_Ripple(at, vel.clamp(1, 3), now, roll: roll));
   }
 
   /// 친 세기에 맞는 손끝 되울림(사용자 요청, 2026-09-22: "타격 햅틱 추가") —
@@ -1165,111 +1484,92 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final base = _degreeAt(step, type: 'bass', chord: false);
     // `_voicing` 은 코드 단계 전용 쓸기로만 바뀐다(`_pressMove` 의 `!_hasTone`
     // 분기) — 베이스는 그 분기를 안 타니(사다리로 일찍 빠진다) 여기서는 늘 0.
-    return (base + tone + 7 * (_voicing > 0 ? 1 : 0)).clamp(0, kMaxDegree);
+    return (base + tone).clamp(0, kMaxDegree);
   }
 
-  /// 코드 한 방 — **두께**(같이 닿은 손가락 수)가 3화음/7화음/9화음을 정한다.
+  MusicKey get _key =>
+      MusicKey(root: widget.transport.root, mode: widget.transport.mode);
+
+  /// 칸 → 마디 번호(판 안).
+  int _barOf(int step) => step ~/ widget.project.spb;
+
+  /// 판을 새로 시작한다 — 깔아 둔 기본 진행으로 되돌리고 손짓 기록을 비운다.
+  void _resetChordPlan() {
+    _cp.reset();
+    _lastSpec = null;
+    _lastDir = 0;
+    _landBar = -1;
+    _landPos = null;
+    _prevVoiced = doodleVoiceSeed(_key, _cp.base);
+  }
+
+  /// 코드 한 방 — **탭 = 리듬, 세기는 균일.** 어느 코드인지는 그 마디에 깔린 진행이,
+  /// 색은 **탭 순간의 세로 위치**가 정한다(즉시 들린다). 좌우는 소리를 안 바꾸고
+  /// 뒤 마디의 진행만 바꾼다 — 그 마디 **마지막 탭**의 자리가 남는다.
   void _chordDown(
     int step,
-    int vel, {
+    Offset at,
+    Size area,
+    _Finger f, {
     required bool recording,
-    required DateTime now,
   }) {
-    // 같은 칸에서 짧은 시간 안에 닿은 손가락들을 **한 화음**으로 센다.
-    // 벌린 거리를 안 재는 이유: 손 크기·화면 크기마다 달라서 문턱을 못 잡는다.
-    // 개수는 틀릴 수가 없다.
-    final first = _chordFirstAt;
-    if (first == null ||
-        _chordFirstStep != step ||
-        now.difference(first).inMilliseconds > _kChordGroupMs) {
-      _chordFirstAt = now;
-      _chordFirstStep = step;
-      _chordFingers = 1;
-    } else {
-      _chordFingers++;
+    final bar = _barOf(step);
+    final pick = recording ? _cp.pickAt(bar) : _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
+    final color = doodleColorOfY(area.height <= 0 ? 0.5 : at.dy / area.height);
+    final dir = doodleDirOfX(area.width <= 0 ? 0.5 : at.dx / area.width);
+    var spec = doodleChordSpec(_key, pick, color);
+    // 록 기타의 파워코드 — 재생(`buildChordPattern` 의 plainType)과 같은 규칙.
+    // 종류를 안 적은 자리(=담백)만 스타일이 정한다.
+    final plain = doodleChordText(_key, pick, color) == null
+        ? genreChordType(widget.project.genre, _chordTrack.voice)
+        : null;
+    if (plain != null) {
+      spec = ChordSpec(root: spec.root, type: plain);
     }
-    final thick = _chordFingers.clamp(1, 3);
-    final key = MusicKey(root: widget.transport.root, mode: widget.transport.mode);
-    final degree = _degreeAt(step, type: 'chord', chord: true);
-    final text = _thickText(key, degree, thick);
-    final spec = _specOf(key, degree, text);
-    // **친 소리 = 적힌 음.** 재생 쪽(`buildChordPattern`)도 기타/나일론이면
-    // `guitarChordMidi`(바레 모양, 자리바꿈 없음)를, 아니면 `invertChord`
-    // 하나만 쓴다 — 여기서 같은 두 갈래를 그대로 따라야 소리와 기록이 갈리지
-    // 않는다.
+    // **친 소리 = 재생.** 기타/나일론은 바레 모양(자리바꿈 없음), 나머지는 `voiceLead` —
+    // 앞 코드와 공통음을 살리고 움직임을 최소로(음역 G3~F#4 라 베이스와 안 엉킨다).
     final isGuitar = _chordTrack.voice == 'guitar' || _chordTrack.voice == 'nylon';
-    final voicedMidi = isGuitar
-        ? guitarChordMidi(spec)
-        : invertChord(chordMidiOf(spec), _voicing);
-    _chordToneCount = voicedMidi.length.clamp(1, _kMaxChordTones);
+    final List<int> voicedMidi;
+    if (isGuitar) {
+      voicedMidi = guitarChordMidi(spec);
+    } else {
+      voicedMidi = voiceLead(
+        chordMidiOf(spec),
+        _prevVoiced.isEmpty ? null : _prevVoiced,
+      );
+      _prevVoiced = voicedMidi;
+    }
     // **잡고 있는 소리로 낸다.** 예전엔 `batch` 로 8초짜리 한 방을 냈는데,
-    // `batch` 는 번호가 없어서 `holdOff` 로 못 끊는다 — 떼도 8초를 울렸고,
-    // 두께가 바뀌면 앞 화음 위에 새 화음이 겹쳐 지저분해진다.
+    // `batch` 는 번호가 없어서 `holdOff` 로 못 끊는다.
     for (var i = 0; i < _kMaxChordTones; i++) {
       widget.host?.holdOff(_kChordId + i);
+    }
+    // **패드/스트링 스웰** — 화면 아래에서 닿으면 작게 시작해 **위로 그을수록** 차오른다
+    // (`_pressMove` 가 `setSwell`). 스웰은 코드 버스(`kSwellBus`)에 걸리므로, 라이브 전용
+    // 버스(`kPartLive`)로 내면 안 걸린다 — 스웰 음색은 코드 버스로 낸다.
+    final swellVoice = isSwellVoice(_chordTrack.voice);
+    if (swellVoice && swellStartsAt(area.height <= 0 ? 0 : at.dy / area.height)) {
+      f.swell = true;
+      widget.host?.setSwell(kSwellBus, kSwellStart, smoothSec: 0.005);
     }
     for (var i = 0; i < voicedMidi.length && i < _kMaxChordTones; i++) {
       widget.host?.holdOn(
         _kChordId + i,
         _chordTrack.voice,
         midiFreq(voicedMidi[i]),
-        vel,
-        part: kPartLive,
+        2,
+        part: swellVoice ? kPartChord : kPartLive,
       );
     }
+    _lastSpec = spec;
+    _lastDir = dir;
+    // 이 탭이 **지금 마디의 착지 탭**이다 — 다음에 치면 이 자리가 덮어써진다.
+    _landBar = bar;
+    _landPos = at;
     if (recording) {
-      if (text != null) {
-        _chordTypeOf[step] = text;
-      } else {
-        _chordTypeOf.remove(step);
-      }
-      // 지금 전위를 이 칸에 못 박는다 — `_decorate` 가 판에 적을 때 그대로
-      // 살려 `buildChordPattern` 도 같은 자리로 재생하게 한다.
-      _voicingOf[step] = _voicing;
+      // 마지막에 친 탭이 이긴다 — 덮어쓰면 그게 곧 착지 탭이다.
+      _cp.recordTap(bar, dir: dir, color: color);
     }
-  }
-
-  /// 두께 → 그 도수의 **다이아토닉** 코드 글. 1이면 null(3화음 그대로).
-  ///
-  /// 스케일에서 뽑으므로 장·단조 어느 쪽이든 그 조에 있는 음만 쓴다 —
-  /// "무엇을 눌러도 틀린 음이 안 난다"가 두께를 늘려도 안 깨진다.
-  String? _thickText(MusicKey key, int degree, int thick) {
-    if (thick <= 1) return null;
-    final sc = scaleOf(key.mode);
-    int off(int x) => sc[x % 7] + 12 * (x ~/ 7);
-    final r = degree % 7;
-    final iv = [0, off(r + 2) - off(r), off(r + 4) - off(r), off(r + 6) - off(r)];
-    String? type;
-    for (final e in kChordTypeIntervals.entries) {
-      final v = e.value;
-      if (v.length == 4 &&
-          v[0] == iv[0] &&
-          v[1] == iv[1] &&
-          v[2] == iv[2] &&
-          v[3] == iv[3]) {
-        type = e.key;
-        break;
-      }
-    }
-    if (type == null) return null; // 표에 없는 화음이면 3화음으로 둔다
-    if (thick <= 2) return buildChordText(type, const [], null);
-    // 9도는 표가 **뿌리에서 14반음 고정**이다. 그 조에서 실제 9도가 14가
-    // 아니면(단조의 어떤 자리) 얹는 순간 조 밖 음이 되므로 7화음에서 멈춘다.
-    final ninth = off(r + 8) - off(r);
-    if (ninth != 14) return buildChordText(type, const [], null);
-    return buildChordText(type, const ['t9'], null);
-  }
-
-  /// 코드 글이 있으면 그 종류로, 없으면 그 도수의 기본 3화음으로.
-  ChordSpec _specOf(MusicKey key, int degree, String? text) {
-    final base = diatonicChords(key)[degree % 7];
-    if (text == null) return base;
-    final c = parseChordText(text);
-    return ChordSpec(
-      root: base.root,
-      type: c.type.isEmpty ? base.type : c.type,
-      tensions: c.tensions,
-    );
   }
 
   /// 손가락이 움직였다.
@@ -1278,13 +1578,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// **미끄러진다**. 옥타브 쓸기는 없다 — 사다리가 그 자리를 가져갔고,
   /// 한 축에 두 뜻을 얹으면 사람이 구분해서 움직일 수 없다.
   ///
-  /// **코드**는 사다리가 없다. 위아래 쓸기 = **자리바꿈**(전위) — 옥타브가
-  /// 아니다(사용자 지적, 2026-09-24: "옥타브를 왜 쓰니 보이싱을 바꾸라고").
-  /// 옥타브는 통째로 음정만 옮길 뿐 화음 색이 안 바뀌고, 전위는 같은
-  /// 음들로 자리만 돌려 소리 색이 실제로 바뀐다 — 두들이 가르치려는 것에
-  /// 더 가깝다.
+  /// **코드**는 움직임을 안 읽는다 — 닿은 순간의 자리가 전부다(`_chordDown`).
   void _pressMove(int pointer, Offset at, Size area) {
     final f = _fingers[pointer];
+    if (f != null && area.height > 0) {
+      f.frac = (at.dy / area.height).clamp(0.0, 1.0);
+    }
+    if (f != null) f.curX = at.dx;
+    if (area.width > 0) _area = area;
     if (f == null || f.swiped || !_hasPitch) return;
     final dx = at.dx - f.downX;
     final dy = at.dy - f.downY;
@@ -1299,33 +1600,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       return;
     }
 
-    // ── 코드: 위아래 쓸기 = 자리바꿈(전위) ──
-    // 쓸기는 **닿은 직후 한 동작만** 본다. 시간 제한이 없던 때에는, 긴 음을
-    // 1~2초 잡고 있는 동안 손가락이 천천히 흘러내리기만 해도 쓸기로 읽혀
-    // `holdOff` + `cancel` 이 돌았다 — 그 음이 **소리도 기록도 없이** 사라졌다.
-    final sinceMs = DateTime.now().difference(f.downAt).inMilliseconds;
-    if (sinceMs <= _kSwipeWindowMs &&
-        dy.abs() >= _kSwipeSlop &&
-        dy.abs() > dx.abs() * _kSwipeRatio) {
-      f.swiped = true;
-      // **코드 화음을 끈다** — 옛날엔 `_kHoldId + f.pad`(베이스용 번호)를 껐는데,
-      // 코드 단계에서 실제로 울리는 소리는 `_chordDown` 이 `_kChordId + i` 로 켠
-      // 화음 음들이다. 켠 적도 없는 번호를 꺼 봐야 아무 일도 안 일어나, 쓸어도
-      // 옛 화음이 계속 울리고 `_voicing` 만 바뀌어 전위가 귀에 반영되지 않았다
-      // (검수에서 잡음). 이 분기는 코드 단계 전용이라(_hasTone 이면 위에서 이미
-      // 사다리로 빠진다) 화음 번호를 다 놓는 게 맞다.
-      for (var i = 0; i < _kMaxChordTones; i++) {
-        widget.host?.holdOff(_kChordId + i);
-      }
-      _rec?.cancel(f.pad);
-      HapticFeedback.selectionClick();
-      setState(() {
-        // 위로 쓸면 다음 전위, 계속 쓸면 다시 기본형으로 돈다(0→1→2→0…).
-        // 화면 좌표는 위가 작은 값이라 부호가 뒤집힌다. Dart 의 `%` 는
-        // 나머지가 늘 0 이상이라 −1 이 나와도 2 로 정확히 돈다.
-        _voicing = (_voicing + (dy < 0 ? 1 : -1)) % 3;
-      });
+    // ── 코드: 움직임은 (스웰 말고는) 소리를 안 바꾼다 ──
+    // 스웰 손가락이면 올라온 만큼 코드 버스를 차오르게 한다. 손이 멈추면 값도 그대로 남는다.
+    if (f.swell) {
+      widget.host?.setSwell(kSwellBus, swellLevel(f.downY, at.dy, area.height));
     }
+    // 좌우·상하는 **닿은 순간의 자리**로 읽는다(`_chordDown`) — 즉시 들려야 하고,
+    // 쓸기를 기다리면 리듬이 늦는다. 전위 쓸기는 없앴다(2026-09-29 (12)).
   }
 
   /// 미끄러뜨려 다음 음으로 — 소리는 앞 주파수에서 이어 붙이고(`glideF`),
@@ -1375,18 +1656,33 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     final cs = _clockState;
     final recording = cs != null && cs.phase == TapPhase.rec;
     final pos = _clock.pos(_loopSec);
-    widget.host?.holdOff(_kHoldId + f.pad);
+    final heldMs = DateTime.now().difference(f.downAt).inMilliseconds;
+    final heldSec = heldMs / 1000.0;
+    // 베이스: **오래 잡았으면 잡은 만큼 꼬리**(808 서브 붐). 톡 친 것은 악기 원래 릴리스.
+    widget.host?.holdOff(
+      _kHoldId + f.pad,
+      tailSec: _stageDef.kind == DoodleKind.bass && heldSec >= kBassBoomAfterSec
+          ? boomTailFor(heldSec)
+          : 0,
+    );
+    // 킥: 누른 만큼 서브가 울다 진다.
+    if (f.boomHeld) {
+      widget.host?.drumHoldOff(_kHoldId + f.pad, tailSec: boomTailFor(heldSec));
+    }
     if (_stageDef.kind == DoodleKind.chord && _fingers.isEmpty) {
+      // **뮤트첩** — 기타를 아주 짧게 떼면 줄을 덮어 「척」(꼬리를 바로 자른다).
+      final mute = isMuteStrum(voice: _chordTrack.voice, heldMs: heldMs, moved: f.moved);
       for (var i = 0; i < _kMaxChordTones; i++) {
-        widget.host?.holdOff(_kChordId + i);
+        widget.host?.holdOff(_kChordId + i, tailSec: mute ? kMuteTailSec : 0);
       }
     }
+    // 스웰 손가락이 떼졌다 — 다음 코드·다른 트랙이 작게 들리지 않게 서서히 원래 크기로.
+    if (f.swell) widget.host?.setSwell(kSwellBus, 1.0, smoothSec: 0.5);
     if (!f.swiped && recording) {
       _rec?.up(f.pad, pos);
       // **톡** 치면 짧게 — 시간 축이라 어느 손짓과도 안 겹친다.
       // `lenOf` 의 바닥값이 격자 한 단위(8분이면 2칸)라, 이게 없으면 아무리
       // 톡 쳐도 전부 8분이 되어 스타카토 베이스를 아예 못 만든다.
-      final heldMs = DateTime.now().difference(f.downAt).inMilliseconds;
       if (_hasPitch && !f.moved && heldMs < _kStaccatoMs) {
         _staccatoAt.add(f.step);
       }
@@ -1426,13 +1722,36 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     for (final f in _fingers.values) {
       var next = f.rollNext;
       if (next == null) continue;
-      // 아직 롤이 시작될 때가 아니다(220ms 전에 떼면 그냥 한 방이다).
+      // **오픈 하이햇** — 하이햇을 꾹(180ms) 누르고 있는데 손이 아래 구역이면 롤이 아니라
+      // 한 번 「지잉」(`hatopen`). 위쪽이면 예전처럼 16분 롤이다. 미리 예약하지 않고
+      // **실제로 180ms 를 채운 뒤에** 낸다 — 톡 친 손가락(60~90ms)이 오픈이 되면 안 되므로.
+      if (lane == 'hat' && !f.rolled && !f.openFired && hatHoldOpens(f.frac)) {
+        if (now.isBefore(next)) continue;
+        f.openFired = true;
+        f.rollNext = null;
+        hits.add([_drumTrack.kit, 'hatopen', f.vel, 180.0, 0.0]);
+        HapticFeedback.selectionClick(); // 「열렸다」 — 상태가 바뀌는 순간 한 번
+        _addRipple(Offset(f.downX, f.downY), 3, now: now, roll: true);
+        continue;
+      }
+      // 아직 롤이 시작될 때가 아니다(180ms 전에 떼면 그냥 한 방이다).
       if (next.isAfter(now.add(Duration(milliseconds: (_kRollAheadSec * 1000).round())))) {
         continue;
       }
       // 이 손가락의 롤 굵기 — 누른 세기로 이미 정해졌다(`_pressDown`이 잰
       // `f.vel`). 롤 도중 세기를 바꾸는 손짓은 없으니 손가락마다 한 번 고르면 된다.
-      final unit = _rollUnit(f.vel);
+      final int unit;
+      if (lane == 'hat') {
+        // 하이햇은 **지금 손가락의 세로 위치**가 밀도다(롤 도중 위로 밀면 촘촘해진다).
+        final sparse = f.frac >= _kHatSparseFrac;
+        if (f.hatSparse != null && f.hatSparse != sparse) {
+          HapticFeedback.selectionClick(); // 밀도가 바뀐 순간만 한 번
+        }
+        f.hatSparse = sparse;
+        unit = sparse ? 2 : 1;
+      } else {
+        unit = _rollUnit(f.vel);
+      }
       final grid = _stepSec * unit;
       // 롤은 **격자에 맞춰** 돈다 — 기계가 내는 소리라 정확할 수 있고,
       // 격자에서 벗어나면 되레 어긋난 것으로 들린다.
@@ -1463,9 +1782,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         if (!f.rolled) {
           f.rolled = true;
           HapticFeedback.selectionClick();
+          // 롤로 넘어간 자리에서 큰 물결 한 번 — 충전 링이 다 차는 순간의 "터짐".
+          _addRipple(Offset(f.downX, f.downY), 3, now: now, roll: true);
         }
         // 첫 한 방보다 살짝 여리게 — 진짜 롤이 그렇다.
-        final rv = f.vel > 1 ? f.vel - 1 : 1;
+        // **크레셴도** — 롤 도중 손을 처음 자리에서 오른쪽으로 밀수록(폭의 1/4마다 한 단계)
+        // **지금 X 로** 세기가 오른다(가로 = 세기 그대로). 밀지 않으면 예전과 같다.
+        final base = f.vel > 1 ? f.vel - 1 : 1;
+        final rv = rollVel(base, f.curX - f.downX, _area.width);
         hits.add([_drumTrack.kit, lane, rv, 180.0, delay]);
         // **도는 중 표시**(사용자 지시, 2026-09-24) — 이 연타가 실제로 들릴
         // 시각을 남겨 두면, 화면(`_rollFlashing`)이 그 시각 바로 뒤 짧은
@@ -1496,6 +1820,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _blankStage();
     // 비운 단계는 "완성" 집계에서도 뺀다 — 재확정 전까지는 안 채워진 것이다.
     _keptStages.remove(_stage);
+    _savedStages.remove(_stage);
     setState(_armStage);
     // 다시 녹음도 **씬 머리에서** 시작한다 — 단계 전환과 같은 결. 안 되감으면
     // 앞서 확정된 악기들이 씬 중간부터 들리다가 미리 세기가 붙어 자리가 튄다.
@@ -1522,6 +1847,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     if (playedSomething) {
       _pending = hits;
       _commit();
+      _savedStages.add(_stage);
     }
     setState(() {
       _stage = i;
@@ -1540,7 +1866,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       Navigator.of(context).pop();
       return;
     }
-    final kept = _stage; // 「사용하기」까지 누른 단계 수
+    // 「사용하기」로 **확정한** 단계들 — 지금 보는 번호(`_stage`)가 아니다.
+    // 건너뛰기만 해도 번호는 올라가지만 씬에는 아무것도 안 남는다.
+    final keptIdx = _keptStages.toList()..sort();
+    final kept = keptIdx.length;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1549,7 +1878,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         content: Text(
           kept == 0
               ? '아직 아무것도 안 남겼어요. 지금 나가면 이 씬은 그대로입니다.'
-              : '$kept개(${_stages.take(kept).map((s) => s.label).join(' · ')})는 '
+              : '$kept개(${keptIdx.map((i) => _stages[i].label).join(' · ')})는 '
                     '이미 씬에 남았어요.\n지금 치던 ${_stageDef.label}만 버려집니다.',
           style: const TextStyle(color: Colors.white70, height: 1.5),
         ),
@@ -1605,18 +1934,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           drum: _ops.toDef(_drumPatternName, _bars),
         );
       case DoodleKind.bass:
-        final (prog, progSteps) = _prog();
-        _bassNotes = _decorate(tapToNotes(
-          const [], // 다시 녹음이면 이전 것을 지우고 새로 얹는다 — 한 판뿐이다
-          _pending,
-          prog: prog,
-          progSteps: progSteps,
-          steps: _bars * widget.project.spb,
-          type: 'bass',
-          chord: false,
-          chromatic: false,
-          mode: widget.transport.mode,
-        ), chord: false);
+        // 친 리듬·세기·음 고르기를 **따로 간직**한다 — 코드 진행이 나중에 바뀌면
+        // 음높이만 새 진행에 맞춰 다시 얹는다(`_repitchBass`, 순서 무관).
+        _bassSnap = _BassTake(List.of(_pending), _TakeMaps.copyOf(_velOf, _toneOf, _glideAt, _staccatoAt));
+        _bassNotes = _buildBassNotes(_bassSnap!);
         widget.project.putUserPattern(
           'bass',
           _bassPatternName,
@@ -1627,9 +1948,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         // 코드 단계는 **자기가 쓸 진행을 자기가 만든다** — 들어올 때 챙겨 둔
         // 원래 진행을 바탕으로 삼아, 안 친 칸은 원래 화성을 따라간다.
         final (prog, progSteps) = _prog();
+        // **리듬 락(#9)** — 마지막으로 친 마디의 타격 리듬을 그 뒤 안 친 마디에 자동으로 반복한다
+        // (친 마디는 친 대로, 첫 마디를 안 쳤으면 반복 없음). 톡(뮤트)도 같이 옮긴다.
+        final (locked, lockFrom) = lockChordRhythm(
+          _pending,
+          spb: widget.project.spb,
+          bars: _bars,
+        );
+        final lockMaps = _TakeMaps(_velOf, _toneOf, _glideAt, {
+          ..._staccatoAt,
+          for (final e in lockFrom.entries)
+            if (_staccatoAt.contains(e.value)) e.key,
+        });
         _chordNotes = _decorate(tapToNotes(
           const [],
-          _pending,
+          locked,
           prog: prog,
           progSteps: progSteps,
           steps: _bars * widget.project.spb,
@@ -1639,25 +1972,93 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           mode: widget.transport.mode,
           // 층(`oct`)은 이 화면에서 안 쓴다 — 전위는 `_decorate` 가
           // `_voicingOf` 로 따로(일곱째 칸에) 적는다.
-        ), chord: true);
+        ), chord: true, maps: lockMaps);
         widget.project.putUserPattern(
           'chord',
           _chordPatternName,
           note: NotePatternDef(_chordPatternName, _bars, _bars, _chordNotes,
               spb: widget.project.spb),
         );
+        // 코드 진행이 확정/바뀌었다 — 이미 친 베이스를 **이 진행으로** 다시 얹는다.
+        _repitchBass();
     }
+  }
+
+  // ── 시험용 손잡이 — 시계 없이 「한 판을 쳤다」를 흉내 내려고만 쓴다 ──
+
+  @visibleForTesting
+  void debugCommit(DoodleKind kind, List<TapHit> hits) {
+    final i = _stages.indexWhere((s) => s.kind == kind);
+    if (i < 0) return;
+    _stage = i;
+    _pending = hits;
+    _commit();
+  }
+
+  @visibleForTesting
+  void debugBlank(DoodleKind kind) {
+    final i = _stages.indexWhere((s) => s.kind == kind);
+    if (i < 0) return;
+    _stage = i;
+    _blankStage();
+  }
+
+  @visibleForTesting
+  void debugTapChord(int bar, {required int dir, int color = 0}) =>
+      _cp.recordTap(bar, dir: dir, color: color);
+
+  @visibleForTesting
+  List<List<Object?>> get debugBassNotes => _bassNotes;
+
+  @visibleForTesting
+  List<List<Object?>> get debugChordNotes => _chordNotes;
+
+  /// 베이스 한 판을 [t] 의 리듬·세기로 **지금 진행**(`_prog()`)에 맞춰 적는다.
+  List<List<Object?>> _buildBassNotes(_BassTake t) {
+    final (prog, progSteps) = _prog();
+    return _decorate(
+      tapToNotes(
+        const [],
+        t.hits,
+        prog: prog,
+        progSteps: progSteps,
+        steps: _bars * widget.project.spb,
+        type: 'bass',
+        chord: false,
+        chromatic: false,
+        mode: widget.transport.mode,
+      ),
+      chord: false,
+      maps: t.maps,
+    );
+  }
+
+  /// **코드 진행이 바뀌면 베이스를 그 진행으로 갱신한다**(순서 무관, 2026-09-29 (14)).
+  /// 이미 친 베이스의 리듬·세기·길이·미끄러짐은 그대로, 음높이(도수)만 새 진행에 맞춘다.
+  /// 코드가 아직 없으면 `_prog()` 가 깔아 둔 기본 진행을 돌려주므로 그대로 그것을 따른다.
+  /// 베이스를 아직 안 쳤으면 아무것도 안 한다.
+  void _repitchBass() {
+    final t = _bassSnap;
+    if (t == null || t.hits.isEmpty) return;
+    _bassNotes = _buildBassNotes(t);
+    widget.project.putUserPattern(
+      'bass',
+      _bassPatternName,
+      note: NotePatternDef(_bassPatternName, _bars, _bars, _bassNotes,
+          spb: widget.project.spb),
+    );
   }
 
   void _keep() {
     final h = widget.host;
     _commit();
     _keptStages.add(_stage);
+    _savedStages.add(_stage);
     if (_keptStages.length >= _stages.length) {
       // **모든 단계가 적어도 한 번은 확정됐다** — 자유 이동으로 순서가
       // 뒤섞여도 이걸로 "완성"을 잰다(자리 기준이 아니라 개수 기준).
       // 되감을 필요가 없다(다음 악기로 넘어가는 게 아니다). 확정한 것만 싣는다.
-      if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+      if (h != null) _refreshLoop(h);
       _stopReviewBlink(); // 완성 화면으로 가니 리뷰의 깜빡임은 그만.
       setState(() => _allDone = true);
       return;
@@ -1683,7 +2084,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 방금 친 것부터 판에 적고 연다 — 안 적으면 빈 격자가 뜬다.
     _commit();
     final h = widget.host;
-    if (h != null) SceneSequencer.refreshLoop(widget.project, widget.transport, h);
+    if (h != null) _refreshLoop(h);
     final track = switch (_stageDef.kind) {
       DoodleKind.drum => _drumTrack,
       DoodleKind.bass => _bassTrack,
@@ -1738,6 +2139,141 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
           child: _ordering
               ? _orderBody()
               : (_allDone ? _doneBody() : (_reviewing ? _reviewBody() : _playBody())),
+        ),
+      ),
+    );
+  }
+
+  // ── 순서 화면의 악기 고르기 (2026-09-29 (16)) ──
+  //
+  // 단계마다 **음색(코드·베이스)·킷(드럼)** 을 고른다. 고른 값은 **트랙 자체**(`Track.voice`/
+  // `Track.kit`)에 쓴다 — 연주(`_pressDown` 이 트랙에서 읽는다)·기록·씬 재생(`SceneSequencer` 도 트랙에서
+  // 읽는다)이 한 곳을 보므로 「친 소리 = 저장된 소리 = 재생」이 구조적으로 같다. 씬에 남기지 않고
+  // 나가면 `dispose` 가 원래 값으로 되돌린다.
+
+  String _instrumentOf(DoodleStage s) => switch (s.kind) {
+    DoodleKind.drum => _drumTrack.kit,
+    DoodleKind.bass => _bassTrack.voice,
+    DoodleKind.chord => _chordTrack.voice,
+  };
+
+  String _instrumentLabel(DoodleStage s) => s.kind == DoodleKind.drum
+      ? doodleKitLabel(_drumTrack.kit)
+      : doodleVoiceLabel(_instrumentOf(s));
+
+  List<String> _instrumentChoices(DoodleStage s) => doodleChoicesWith(
+    switch (s.kind) {
+      DoodleKind.drum => kDoodleDrumKits,
+      DoodleKind.bass => kDoodleBassVoices,
+      DoodleKind.chord => kDoodleChordVoices,
+    },
+    _instrumentOf(s),
+  );
+
+  /// [v] 를 그 단계의 악기로 삼는다. 드럼 세 단계(킥·스네어·하이햇)는 **한 트랙**이라 킷을 같이 쓴다.
+  void _setInstrument(DoodleStage s, String v) {
+    if (_instrumentOf(s) == v) {
+      _previewInstrument(s);
+      return;
+    }
+    switch (s.kind) {
+      case DoodleKind.drum:
+        _drumTrack.kit = v;
+      case DoodleKind.bass:
+        _bassTrack.voice = v;
+      case DoodleKind.chord:
+        _chordTrack.voice = v;
+    }
+    // 편성이 바뀌었다 — 이전 음색에 걸어 둔 스웰은 걷는다.
+    widget.host?.clearSwell();
+    _previewInstrument(s);
+    if (mounted) setState(() {});
+  }
+
+  /// 고른 소리를 **바로 들려준다** — 이름만 보고 고르면 어떤 소리인지 모른다.
+  void _previewInstrument(DoodleStage s) {
+    final h = widget.host;
+    if (h == null) return;
+    switch (s.kind) {
+      case DoodleKind.drum:
+        h.drumOn(_drumTrack.kit, s.drumLane ?? 'kick', 2);
+      case DoodleKind.bass:
+        h.noteOn(
+          _bassTrack.voice,
+          degreeFreq(0, 'bass', _key),
+          0.6,
+          2,
+          part: kPartLive,
+        );
+      case DoodleKind.chord:
+        final spec = doodleChordSpec(_key, _cp.base.first, 0);
+        final guitar = isMuteVoice(_chordTrack.voice);
+        final midi = guitar ? guitarChordMidi(spec) : chordMidiOf(spec);
+        for (final m in midi) {
+          h.noteOn(_chordTrack.voice, midiFreq(m), 0.9, 2, part: kPartLive);
+        }
+    }
+  }
+
+  Future<void> _pickInstrument(DoodleStage s) {
+    final color = switch (s.kind) {
+      DoodleKind.drum => DS.trackDrum,
+      DoodleKind.bass => DS.trackBass,
+      DoodleKind.chord => DS.trackChord,
+    };
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: const Color(0xFF1A1C20),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  s.kind == DoodleKind.drum ? '드럼 킷' : '${s.label} 악기',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  s.kind == DoodleKind.drum
+                      ? '킥·스네어·하이햇이 한 킷을 같이 써요. 누르면 소리가 나요.'
+                      : '누르면 소리가 나요. 고른 음색으로 치고, 저장하고, 재생해요.',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12.5),
+                ),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final v in _instrumentChoices(s))
+                      ChoiceChip(
+                        key: ValueKey('inst-$v'),
+                        label: Text(
+                          s.kind == DoodleKind.drum
+                              ? doodleKitLabel(v)
+                              : doodleVoiceLabel(v),
+                        ),
+                        selected: _instrumentOf(s) == v,
+                        selectedColor: color.withValues(alpha: 0.55),
+                        labelStyle: const TextStyle(color: Colors.white),
+                        backgroundColor: Colors.white.withValues(alpha: 0.08),
+                        onSelected: (_) {
+                          _setInstrument(s, v);
+                          setSheet(() {});
+                        },
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -1813,6 +2349,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                   key: ValueKey(_stages[i]),
                   stage: _stages[i],
                   index: i,
+                  instrument: _instrumentLabel(_stages[i]),
+                  onPickInstrument: () => _pickInstrument(_stages[i]),
                   recommended:
                       chordRecommended && _stages[i].kind == DoodleKind.chord,
                 ),
@@ -1877,7 +2415,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                       ? '내 곡'
                       : genreDef(widget.project.genre).label,
                   style: const TextStyle(
-                    color: Colors.white38,
+                    color: Colors.white60,
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     letterSpacing: 1.2,
@@ -1891,10 +2429,15 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
             ),
           ),
           if (onRetake != null)
-            IconButton(
-              tooltip: '다시',
+            // 아이콘만 있으면 "되감기·다시 시작"인 줄 모른다 — 글자를 붙여 눈에 띄게
+            // (감사 2026-09-29). 누르면 이 악기를 **처음부터 다시** 친다.
+            TextButton.icon(
               onPressed: onRetake,
-              icon: const Icon(Icons.replay, color: Colors.white54),
+              icon: const Icon(Icons.replay, size: 18, color: Colors.white60),
+              label: const Text(
+                '다시',
+                style: TextStyle(color: Colors.white60, fontSize: 13),
+              ),
             )
           else
             const SizedBox(width: 48), // 왼쪽 닫기 버튼과 균형
@@ -1911,7 +2454,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// (`_keptStages`) — 자유 이동 중엔 자리와 확정 여부가 따로 논다.
   Widget _progress() {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 14),
+      // 위아래 14 → 10, 칸 안 세로 4 → 6: 칸(누르는 면)은 ≥44dp 로 키우고
+      // 전체 높이는 그대로 둬 치는 자리(아래 Expanded)가 줄지 않게 했다.
+      padding: const EdgeInsets.symmetric(vertical: 10),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -1922,7 +2467,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                 borderRadius: BorderRadius.circular(10),
                 onTap: () => _gotoStage(i),
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                   child: Column(
                     children: [
                       Icon(
@@ -1934,17 +2479,17 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                         size: 18,
                         color: _keptStages.contains(i) || i == _stage
                             ? Colors.tealAccent
-                            : Colors.white24,
+                            : Colors.white38,
                       ),
                       const SizedBox(height: 4),
                       Text(
                         _stages[i].label,
                         style: TextStyle(
-                          fontSize: 10.5,
+                          fontSize: 11,
                           fontWeight: i == _stage ? FontWeight.w800 : FontWeight.w500,
                           color: _keptStages.contains(i) || i == _stage
                               ? Colors.white70
-                              : Colors.white24,
+                              : Colors.white38,
                         ),
                       ),
                     ],
@@ -1957,100 +2502,255 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     );
   }
 
-  /// 단계마다 다른 색 — 씬 화면의 트랙 색과 같은 계열로 맞춘다(드럼 초록·
-  /// 베이스 파랑·코드 보라·가락 주황). 같은 악기를 두 화면에서 다른 색으로
-  /// 보여 주면 같은 것인 줄 모른다.
+  /// 단계마다 다른 색 — 씬·믹서 화면의 트랙 색과 **같은 값**을 쓴다(드럼
+  /// 초록·베이스 파랑·코드 보라·가락 주황, `DS.trackDrum` 등). 여태는 이
+  /// 화면만 따로 `Colors.lightGreenAccent` 같은 네온 계열을 써서, 같은
+  /// 드럼인데 씬 화면(짙은 연두)과 두들플레이(형광 연두)가 다른 색으로
+  /// 보였다 — 사용자가 "이게 그 악기 맞나" 다시 확인해야 했다(디자인 감사,
+  /// 2026-09-29). `DS.*`로 맞춘다.
   Color _stageColor() => switch (_stageDef.kind) {
-    DoodleKind.drum => Colors.lightGreenAccent,
-    DoodleKind.bass => Colors.lightBlueAccent,
-    DoodleKind.chord => Colors.purpleAccent,
+    DoodleKind.drum => DS.trackDrum,
+    DoodleKind.bass => DS.trackBass,
+    DoodleKind.chord => DS.trackChord,
   };
 
-  /// 친 순간 퍼지는 물결. 시계가 이미 30ms마다 `setState` 를 부르므로
-  /// (`_tick`) 따로 애니메이션 장치를 두지 않는다 — 친 시각과 지금의 차로
-  /// 그때그때 크기·진하기를 셈한다.
+  /// **친 자리에서** 퍼지는 물결 + **꾹 누르는 손가락 둘레의 충전 링**.
+  /// 이 화면 전체가 치는 자리라(`Listener`가 통째로 받는다) 물결도 화면 좌표로
+  /// 그린다 — 손가락이 닿은 곳이 반짝이고, 세게 칠수록 크고 진하다.
   ///
-  /// **세기(1~3)에 따라 물결 크기·진하기가 다르다** — 세게 칠수록 크고
-  /// 진한 물결이 퍼진다(사용자 지시, 이번 배치: "친 세기에 따라 물결 크기가
-  /// 다르게"). 단계 색(`_stageColor`)은 그대로 쓴다.
-  List<Widget> _hitRipples(double d) {
-    final at = _hitAt;
-    if (at == null) return const [];
-    final ms = DateTime.now().difference(at).inMilliseconds;
-    if (ms > _kHitFx.inMilliseconds) return const [];
-    final t = ms / _kHitFx.inMilliseconds; // 0 → 1
-    final vel = _hitVel.clamp(1, 3);
-    final growth = 26.0 + 16.0 * vel; // vel1=42, vel2=58, vel3=74
-    final alpha = 0.34 + 0.13 * vel; // vel1=0.47, vel2=0.60, vel3=0.73
-    return [
-      Container(
-        width: d + growth * t,
-        height: d + growth * t,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: _stageColor().withValues(alpha: alpha * (1 - t)),
-            width: 2 + vel * 0.6,
-          ),
-        ),
-      ),
-    ];
-  }
-
-  /// **코드 두께 동심원** — 지금 몇 겹(3/7/9화음, `_chordFingers`)인지 패드
-  /// 둘레에 동심원 겹으로 보여 준다. 손가락이 늘수록 원이 한 겹씩 바깥으로
-  /// 확장된다(제스처 이펙트 겸 힌트, 이번 배치). 코드 단계에서 **잡고
-  /// 있는 동안만** 보인다 — 놓으면 `_chordFingers`가 다음 화음을 기다리는
-  /// 값으로 남아 있어도(재설정 없음) `_pressed`가 꺼지므로 같이 사라진다.
-  List<Widget> _chordRings(double d) {
-    if (_stageDef.kind != DoodleKind.chord || !_pressed) return const [];
-    final thick = _chordFingers.clamp(1, 3);
-    return [
-      for (var i = 1; i <= thick; i++)
-        Container(
-          width: d + i * 22,
-          height: d + i * 22,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: _stageColor().withValues(alpha: 0.30 - i * 0.06),
-              width: 1.5,
+  /// 세기 3단계가 눈으로 갈리게 **크기 차를 키웠다**(감사 2026-09-29: 예전
+  /// 42/58/74px 는 손가락에 가려 구분이 안 됐다) — 여리게 56, 보통 96, 세게
+  /// 150px. 한 방은 안이 채워졌다 사라지는 「플래시」를, 롤로 넘어간 순간은
+  /// 더 두꺼운 이중 링을 쓴다.
+  List<Widget> _touchFx() {
+    final now = DateTime.now();
+    final out = <Widget>[];
+    for (final r in _ripples) {
+      final ms = now.difference(r.born).inMilliseconds;
+      if (ms < 0 || ms > _kHitFx.inMilliseconds) continue;
+      final t = ms / _kHitFx.inMilliseconds; // 0 → 1
+      final reach = switch (r.vel) { 1 => 56.0, 2 => 96.0, _ => 150.0 };
+      final size = (r.roll ? 40.0 : 24.0) + (reach - 24.0) * Curves.easeOutCubic.transform(t);
+      final a = (0.30 + 0.16 * r.vel) * (1 - t);
+      out.add(
+        Positioned(
+          left: r.at.dx - size / 2,
+          top: r.at.dy - size / 2,
+          width: size,
+          height: size,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _stageColor().withValues(alpha: 0.22 * (1 - t) * (r.vel / 3)),
+              border: Border.all(
+                color: _stageColor().withValues(alpha: a),
+                width: (r.roll ? 4 : 2) + r.vel * 0.7,
+              ),
             ),
           ),
         ),
-    ];
+      );
+    }
+    for (final f in _fingers.values) {
+      if (f.swiped) continue;
+      // 롤 충전 링 — 손가락 둘레에서 차오른다. 다 차면 물결이 터지고 링은 사라진다.
+      final charge = _chargeOf(f, now);
+      if (charge != null) {
+        out.add(
+          Positioned(
+            left: f.downX - 38,
+            top: f.downY - 38,
+            width: 76,
+            height: 76,
+            child: CircularProgressIndicator(
+              value: charge,
+              strokeWidth: 4,
+              backgroundColor: Colors.white12,
+              valueColor: AlwaysStoppedAnimation(_stageColor()),
+            ),
+          ),
+        );
+      }
+      // 롤이 도는 동안 — 박(격자)마다 손가락 밑이 깜빡인다.
+      final at = f.flashAt;
+      if (f.rolled && at != null) {
+        final diff = now.difference(at).inMilliseconds;
+        if (diff >= 0 && diff < 90) {
+          out.add(
+            Positioned(
+              left: f.downX - 30,
+              top: f.downY - 30,
+              width: 60,
+              height: 60,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: _stageColor().withValues(alpha: 0.5 * (1 - diff / 90)),
+                ),
+              ),
+            ),
+          );
+        }
+      }
+    }
+    return out;
   }
 
-  /// 지금 코드가 몇 번째 자리바꿈인가 — `(135)(351)(531)`. 0(기본형)이면
-  /// 아무것도 안 띄운다(기본 상태에까지 이름표를 달면 화면만 시끄럽다).
-  Widget _voicingBadge() {
-    if (_stageDef.kind != DoodleKind.chord || _voicing == 0) {
-      return const SizedBox(height: 26);
-    }
-    final digits = voicingDegreeLabels(_chordToneCount, _voicing)
-        .map((d) => '$d')
-        .join();
-    // `Container` 에 `alignment` 를 주면 부모 폭을 다 먹는다 — `Center` 로
-    // 감싸야 글자만큼만 차지하는 이름표가 된다(실기기에서 줄 전체로 늘어난
-    // 것을 보고 잡았다).
-    return Center(
-      child: Container(
-        height: 26,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: _stageColor().withValues(alpha: 0.18),
-          borderRadius: BorderRadius.circular(13),
-          border: Border.all(color: _stageColor().withValues(alpha: 0.6)),
-        ),
+  static const Color _kCool = Color(0xFF6EA8FF), _kWarm = Color(0xFFFFB067);
+
+  /// 좌우(진행 방향)·상하(색)가 뜻하는 것을 깐다(코드 단계만).
+  ///  · 좌 1/3 찬색 = 긴장, 우 1/3 따뜻한색 = 해결, 가운데는 「그대로」.
+  ///  · 세로는 **한가운데 한 줄**로 위(화려)·아래(담백) 두 구역 — 미세 조준이 없다.
+  ///  · 이 마디의 **착지 방향 쪽이 진하게** 켜져 있다(마디가 넘어가면 꺼진다).
+  /// 경계는 `doodleDirOfX`(1/3·2/3)·`doodleColorOfY`(1/2)와 같다 — 다르면 보이는 것과 나는
+  /// 소리가 어긋난다.
+  Widget _chordZones(Size area) {
+    final dir = _curDir();
+    final f = _fingers.values.isEmpty ? null : _fingers.values.first.frac;
+    final upOn = f != null && f < 0.5, downOn = f != null && f >= 0.5;
+    Widget label(String t, Alignment a, {double alpha = 0.22}) => Align(
+      alignment: a,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
         child: Text(
-          '$_voicing전위 ($digits)',
+          t,
           style: TextStyle(
-            color: _stageColor(),
-            fontSize: 12,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
+            color: Colors.white.withValues(alpha: alpha),
           ),
         ),
+      ),
+    );
+    return IgnorePointer(
+      child: Stack(
+        children: [
+          // 세로 두 구역 — 눌린 쪽이 살짝 밝다.
+          Column(
+            children: [
+              Expanded(child: Container(color: Colors.white.withValues(alpha: upOn ? 0.05 : 0))),
+              Expanded(child: Container(color: Colors.white.withValues(alpha: downOn ? 0.05 : 0))),
+            ],
+          ),
+          // 좌우 띠 — 착지 방향 쪽이 진하다.
+          Row(
+            children: [
+              Expanded(
+                child: Container(
+                  color: _kCool.withValues(alpha: dir < 0 ? 0.20 : 0.05),
+                ),
+              ),
+              const Spacer(),
+              Expanded(
+                child: Container(
+                  color: _kWarm.withValues(alpha: dir > 0 ? 0.20 : 0.05),
+                ),
+              ),
+            ],
+          ),
+          // 뚜렷한 가운데 선.
+          Align(
+            alignment: Alignment.center,
+            child: Container(height: 2, color: Colors.white.withValues(alpha: 0.22)),
+          ),
+          label('◀ 긴장', Alignment.centerLeft, alpha: dir < 0 ? 0.6 : 0.25),
+          label('해결 ▶', Alignment.centerRight, alpha: dir > 0 ? 0.6 : 0.25),
+          label('위 · 화려하게 (7th)', const Alignment(0, -0.62)),
+          label('아래 · 담백하게', const Alignment(0, 0.62)),
+          if (isSwellVoice(_chordTrack.voice))
+            label('▲ 아래에서 위로 그으면 차올라요', const Alignment(0, 0.92), alpha: 0.32),
+        ],
+      ),
+    );
+  }
+
+  /// **지금 마디의 착지 방향**(-1/0/+1) — 이 마디에서 마지막으로 친 탭의 쪽. 마디가 넘어가면
+  /// 0(새 마디는 아직 착지가 없다).
+  int _curDir() {
+    final rec = _rec;
+    final bar = rec == null ? 0 : _barOf(rec.stepOf(_clock.pos(_loopSec)));
+    return _landBar == bar ? _lastDir : 0;
+  }
+
+  /// **착지 탭 표시** — 이 마디에서 마지막으로 친 자리에 고리를 남긴다. "지금 이 탭이 다음
+  /// 코드를 정한다"가 눈에 보이게. 새로 치면 고리가 옮겨 간다.
+  Widget _landMarker() {
+    final at = _landPos;
+    final dir = _curDir();
+    if (_stageDef.kind != DoodleKind.chord || at == null || _landBar < 0) {
+      return const SizedBox.shrink();
+    }
+    if (_landBar != _barNow()) return const SizedBox.shrink();
+    final tone = dir < 0 ? _kCool : (dir > 0 ? _kWarm : Colors.white70);
+    return Positioned(
+      left: at.dx - 24,
+      top: at.dy - 24,
+      child: IgnorePointer(
+        child: Container(
+          width: 48,
+          height: 48,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: tone.withValues(alpha: 0.9), width: 2.5),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '착지',
+            style: TextStyle(color: tone, fontSize: 11, fontWeight: FontWeight.w800),
+          ),
+        ),
+      ),
+    );
+  }
+
+  int _barNow() {
+    final rec = _rec;
+    return rec == null ? 0 : _barOf(rec.stepOf(_clock.pos(_loopSec)));
+  }
+
+  /// 코드 이름표 — **지금 코드 · 다음 코드 미리보기**. 다음 코드는 마지막으로 친 탭의 방향이
+  /// 이대로 마디 끝에 확정될 때의 코드다(`DoodleChordPlan.previewNext`, 확정과 같은 값).
+  Widget _chordBadge() {
+    if (_stageDef.kind != DoodleKind.chord) {
+      return const SizedBox(height: 44);
+    }
+    final bar = _barNow();
+    final cur = _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
+    final spec = _lastSpec ?? doodleChordSpec(_key, cur, 0);
+    final nextPick = _cp.previewNext(bar);
+    final dir = _curDir();
+    final nextName = nextPick == null
+        ? '끝'
+        : doodleChordName(doodleChordSpec(_key, nextPick, 0));
+    final tone = dir < 0 ? _kCool : (dir > 0 ? _kWarm : _stageColor());
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            height: 26,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: tone.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(color: tone.withValues(alpha: dir == 0 ? 0.35 : 0.7)),
+            ),
+            child: Text(
+              '지금 ${doodleChordName(spec)}  ·  다음 → $nextName',
+              style: TextStyle(
+                color: dir == 0 ? Colors.white70 : tone,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            dir == 0 ? '마지막에 친 쪽이 다음 코드를 정해요' : (dir < 0 ? '긴장 쪽으로 이어져요' : '해결 쪽으로 이어져요'),
+            style: const TextStyle(color: Colors.white38, fontSize: 10.5),
+          ),
+        ],
       ),
     );
   }
@@ -2091,13 +2791,25 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                     // 베이스는 **사다리**(세로 = 음 높이), 나머지는 **과녁**
                     // (가운데 = 세게). 한 화면에 한 가지 축만 둔다 — 세로
                     // 위치와 세로 이동에 서로 다른 뜻을 얹으면 손이 헷갈린다.
-                    if (_hasTone) _toneLadder() else _velTarget(area),
+                    if (_hasTone)
+                      _toneLadder()
+                    else if (_stageDef.kind == DoodleKind.chord)
+                      _chordZones(area)
+                    else if (_stageDef.drumLane == 'kick' ||
+                        _stageDef.drumLane == 'hat')
+                      _drumZones(area)
+                    else
+                      _velTarget(area),
                     // 패드는 **「세게」 구역 그 자체**이고 화면 한가운데에 있다.
                     // 보이는 동그라미와 실제 과녁이 어긋나면 "가운데가 세게"가
                     // 그냥 거짓말이 된다(실기기에서 두 원이 따로 놀던 것을 보고
                     // 고쳤다). 베이스는 사다리가 악기라 패드를 안 그린다 —
                     // 없는 과녁을 그리면 거기를 치게 된다.
                     if (!_hasTone) _padCircle(area, phase, recording),
+                    // 친 자리 물결·롤 충전 링 — 패드 위, 글자 아래. 화면 좌표라
+                    // `Positioned` 로 그린다(전체가 치는 자리이므로).
+                    ..._touchFx(),
+                    _landMarker(),
                     // 이름·상태는 위, 안내는 아래 — **치는 자리를 안 가린다.**
                     Align(
                       alignment: Alignment.topCenter,
@@ -2113,7 +2825,17 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                               letterSpacing: 2,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 2),
+                          // 이 단계가 **무슨 악기이고 곡에서 무슨 일을 하는지** 한 줄 —
+                          // 첫 진입에 "지금 뭘 하는 거지"가 안 남게(감사 2026-09-29).
+                          Text(
+                            _roleText(),
+                            style: const TextStyle(
+                              color: Colors.white38,
+                              fontSize: 12.5,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
                           Text(
                             _statusText(phase),
                             style: TextStyle(
@@ -2125,7 +2847,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                             ),
                           ),
                           const SizedBox(height: 8),
-                          _voicingBadge(),
+                          _chordBadge(),
                         ],
                       ),
                     ),
@@ -2136,9 +2858,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                         child: Text(
                           _hintText(),
                           textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            color: Colors.white30,
-                            fontSize: 11.5,
+                          // **녹음 전(대기·미리 세기)에는 안내를 또렷하게** — 이때가
+                          // 손짓을 읽을 유일한 여유다. REC 가 시작되면 리듬을 타느라
+                          // 어차피 안 보므로 원래 옅기로 물러난다.
+                          style: TextStyle(
+                            color: recording ? Colors.white54 : Colors.white70,
+                            fontSize: recording ? 12 : 13.5,
+                            height: 1.4,
                           ),
                         ),
                       ),
@@ -2176,6 +2902,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     return rolled ? '$n번 쳤어요 (굴린 것 포함)' : '$n번 쳤어요';
   }
 
+  /// 단계 이름 밑 한 줄 — 이 악기가 곡의 뼈대에서 하는 일.
+  /// 악보 말(도수·전위)을 안 쓴다: 이 앱의 첫 규칙이 "몰라도 된다"이다.
+  String _roleText() => '${_roleBase()} · ${_instrumentLabel(_stageDef)}';
+
+  String _roleBase() => switch (_stageDef.kind) {
+    DoodleKind.drum => switch (_stageDef.drumLane) {
+      'kick' => '곡의 심장박동 · 박의 바닥을 깔아요',
+      'snare' => '박에 힘을 주는 탁 · 뒷박에 얹어요',
+      'hat' => '박 사이를 잘게 채우는 째깍',
+      _ => '드럼 한 줄',
+    },
+    DoodleKind.chord => '곡의 색깔 · 화음을 눌러 깔아요',
+    DoodleKind.bass => '화음의 뿌리 · 낮게 받쳐 줘요',
+  };
+
   /// 이 단계에서 **실제로 듣는 손짓만** 적는다. 안 쓰는 것까지 적어 두면
   /// 해 봤는데 아무 일도 안 일어나서 "고장 난 화면"으로 보인다.
   String _hintText() => switch (_stageDef.kind) {
@@ -2183,17 +2924,63 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     // 안 일어나서 고장으로 보인다(킥에는 롤이 없다 — `_canRoll`).
     DoodleKind.drum =>
       _canRoll
-          ? '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
-                '꾹 누르면 굴러갑니다 · 세게 누르면 16분, 여리게 누르면 8분으로'
-          : '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
-                '킥은 **어디에 놓는가**가 전부입니다 · 두 손가락으로 번갈아 쳐도 됩니다',
+          ? (_stageDef.drumLane == 'hat'
+                ? '오른쪽일수록 세게 · 톡 치면 닫힌 하이햇\n'
+                      '아래에서 꾹 누르면(0.18초) 열린 하이햇 · 위에서 꾹 누르면 16비트 롤 — 롤 중 오른쪽으로 밀면 점점 세져요'
+                : '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
+                      '꾹 누르면 굴러갑니다 · 세게 누르면 16분, 여리게 누르면 8분으로 · 롤 중 오른쪽으로 밀면 점점 세져요')
+          : '위쪽은 정타, 아래쪽은 고스트(여린 킥) · 오른쪽일수록 세게\n'
+                '킥은 **어디에 놓는가**가 전부입니다 · 두 손가락으로 번갈아 쳐도 됩니다'
+                '${doodleBoomKit(_drumTrack.kit) ? '\n길게 누르면 808 서브가 그만큼 웅— 울어요' : ''}',
     DoodleKind.bass =>
       '위로 갈수록 높은 음 · 오른쪽으로 갈수록 세게\n'
-          '톡 치면 짧게, 잡으면 길게 · 잡은 채 위아래로 끌면 미끄러집니다',
+          '톡 치면 짧게, 잡으면 길게(오래 잡을수록 꼬리도 길게) · 잡은 채 위아래로 끌면 미끄러집니다',
     DoodleKind.chord =>
-      '아무 데나 쳐도 됩니다 · 한가운데가 세게\n'
-          '손가락 두 개면 7화음, 세 개면 9화음 · 위아래로 쓸면 자리바꿈',
+      '박자에 맞춰 톡톡 · 손가락 하나면 됩니다\n'
+          '마디의 마지막 탭이 다음 코드를 정해요 — 왼쪽 긴장 · 오른쪽 해결 · 위 화려 · 아래 담백'
+          '${isSwellVoice(_chordTrack.voice) ? '\n아래에서 위로 그으면 볼륨이 차올라요(스웰)' : ''}'
+          '${isMuteVoice(_chordTrack.voice) ? '\n아주 짧게 톡 떼면 줄을 덮는 뮤트 「척」' : ''}'
+          '\n한 마디만 쳐 두면 안 친 뒷마디에 그 리듬이 이어져요',
   };
+
+  /// 킥·하이햇의 **세로 구역**을 옅게 깐다 — 킥: 아래 = 고스트. 하이햇: 아래 = 8분(성긴),
+  /// 위 = 16분(촘촘, 롤 중 위로 밀면 필인). 경계는 `_kGhostFrac`·`_kHatSparseFrac` 와 같다.
+  Widget _drumZones(Size area) {
+    final kick = _stageDef.drumLane == 'kick';
+    final edge = kick ? _kGhostFrac : _kHatSparseFrac;
+    final live = _fingers.values.map((f) => f.frac).toList();
+    final lowOn = live.any((y) => y >= edge);
+    final highOn = live.any((y) => y < edge);
+    Widget zone(double flex, String label, bool on, {bool top = false}) => Expanded(
+      flex: (flex * 100).round(),
+      child: Container(
+        alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        decoration: BoxDecoration(
+          color: _stageColor().withValues(alpha: on ? 0.10 : 0.03),
+          border: top
+              ? null
+              : Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            color: Colors.white.withValues(alpha: 0.20),
+          ),
+        ),
+      ),
+    );
+    return IgnorePointer(
+      child: Column(
+        children: [
+          zone(edge, kick ? '정타 · 오른쪽일수록 세게' : '16비트 · 위로 밀면 촘촘', highOn, top: true),
+          zone(1 - edge, kick ? '고스트' : '8비트', lowOn),
+        ],
+      ),
+    );
+  }
 
   /// **세기 과녁** — 한가운데가 세게, 가장자리가 여리게(`_velFromCenter`).
   ///
@@ -2218,21 +3005,16 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     );
   }
 
-  /// **롤 예고 진행도**(0~1) — `_canRoll` 인 악기를 꾹 누르고 있는 동안,
-  /// 롤이 돌기 시작하는 220ms(`_kRollAfterMs`)까지 얼마나 찼는가. 아직
-  /// 눌린 게 없거나 이미 롤로 넘어갔으면(`f.rolled`) null — 예고는 **롤이
-  /// 돌기 전까지만** 뜻이 있다(사용자 지시, 2026-09-24: "차오르는 링으로
-  /// 예고"). 여러 손가락이 같이 눌려 있으면 제일 먼저 누른 손가락 기준.
-  double? _rollChargeProgress() {
-    if (!_canRoll) return null;
-    DateTime? downAt;
-    for (final f in _fingers.values) {
-      if (f.swiped || f.rolled) continue;
-      if (downAt == null || f.downAt.isBefore(downAt)) downAt = f.downAt;
-    }
-    if (downAt == null) return null;
-    final ms = DateTime.now().difference(downAt).inMilliseconds;
-    return (ms / _kRollAfterMs).clamp(0.0, 1.0);
+  /// **롤 예고 진행도**(0~1) — `_canRoll` 인 악기를 꾹 누르고 있는 손가락 하나가
+  /// 롤이 돌기 시작하는 180ms(`_kRollAfterMs`)를 향해 얼마나 찼는가. 톡 치는
+  /// 동안(`_kRollShowMs` 전)이거나 이미 롤로 넘어갔으면(`f.rolled`) null —
+  /// 예고는 **꾹 누르기 시작한 뒤 롤이 돌기 전까지만** 뜻이 있다.
+  double? _chargeOf(_Finger f, DateTime now) {
+    if (!_canRoll || f.swiped || f.rolled) return null;
+    final ms = now.difference(f.downAt).inMilliseconds;
+    if (ms <= _kRollShowMs) return null;
+    final v = (ms - _kRollShowMs) / (_kRollAfterMs - _kRollShowMs);
+    return v >= 1 ? null : v.clamp(0.0, 1.0);
   }
 
   /// **롤이 도는 동안** 패드를 격자에 맞춰 깜빡인다 — `_tickRoll`이 실제로
@@ -2252,19 +3034,24 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     return false;
   }
 
+  /// 잡고 있는 동안 패드에 적는 글자. 코드는 **지금 울리는 코드 이름**(Am7 등)을 적는다.
+  String _holdLabel() {
+    if (_stageDef.kind != DoodleKind.chord) return 'HOLD';
+    final sp = _lastSpec;
+    return sp == null ? 'HOLD' : doodleChordName(sp);
+  }
+
   /// 치는 패드 = **「세게」 구역 그 자체**(`_kHardR`). 화면 한가운데.
   Widget _padCircle(Size area, TapPhase phase, bool recording) {
     final m = area.width < area.height ? area.width : area.height;
     final d = m * _kHardR * 2;
-    final charge = _rollChargeProgress();
     final flashing = _rollFlashing();
     // 코드 화음을 잡고 있는 동안 = **홀드 글로우**(사용자 지시, 이번 배치:
     // "잡고 있는 동안 계속, 떼면 사라지게"). 드럼은 톡 치는 악기라 길게
     // 잡을 일이 없어 여기선 안 켠다(`_hasTone`인 베이스는 사다리가 대신
     // 맡는다 — 아래 `_toneLadder`).
     final holdGlow = _stageDef.kind == DoodleKind.chord && _pressed;
-    // 코드 두께 동심원 — 바깥으로 원이 더 커질 수 있으니 상자도 넉넉히 둔다.
-    final ringExtra = _stageDef.kind == DoodleKind.chord ? 3 * 22.0 : 0.0;
+    const ringExtra = 0.0;
     return IgnorePointer(
       child: SizedBox(
         width: d + 16 + ringExtra,
@@ -2272,22 +3059,6 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            ..._hitRipples(d),
-            ..._chordRings(d),
-            // 롤 예고 링 — 꾹 누르는 동안 220ms에 걸쳐 차오른다. 롤이 실제로
-            // 돌기 시작하면(`f.rolled`) 사라진다 — 그 뒤는 `flashing` 깜빡임이
-            // "돌고 있다"를 대신 알린다.
-            if (charge != null && charge > 0 && charge < 1)
-              SizedBox(
-                width: d + 14,
-                height: d + 14,
-                child: CircularProgressIndicator(
-                  value: charge,
-                  strokeWidth: 3,
-                  backgroundColor: Colors.white10,
-                  valueColor: AlwaysStoppedAnimation(_stageColor()),
-                ),
-              ),
             Container(
               width: d,
               height: d,
@@ -2322,10 +3093,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
               ),
               child: Center(
                 child: Text(
-                  phase == TapPhase.wait || phase == TapPhase.count
+                  // 누르고 있으면 **대기 중이어도** 잡은 글자를 보여 준다 — "곧
+                  // 시작"이 남아 있으면 소리가 나는데도 안 눌린 화면처럼 보인다.
+                  _pressed
+                      ? _holdLabel()
+                      : (phase == TapPhase.wait || phase == TapPhase.count)
                       ? '곧 시작'
-                      : _pressed
-                      ? 'HOLD'
                       : 'TAP',
                   style: const TextStyle(
                     color: Colors.white70,
@@ -2417,6 +3190,43 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                         color: _stageColor().withValues(alpha: 0.22 * (1 - t)),
                       );
                     },
+                  ),
+                ),
+            ],
+          ),
+        ),
+        // **세기 3구역 — 지금 잡은 구역이 밝다**(감사 2026-09-29: 왼쪽이 여리게라는
+        // 결만 있었고 경계(1/3·2/3)가 안 보여, 어디서부터 "세게"인지 손이 몰랐다).
+        // 경계는 `_velFromX` 와 같은 1/3·2/3 — 다르면 보이는 것과 나는 세기가 어긋난다.
+        IgnorePointer(
+          child: Row(
+            children: [
+              for (var v = 1; v <= 3; v++)
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(
+                        alpha: _fingers.values.any((f) => !f.swiped && f.vel == v)
+                            ? 0.07
+                            : 0,
+                      ),
+                      border: v == 1
+                          ? null
+                          : Border(
+                              left: BorderSide(
+                                color: Colors.white.withValues(alpha: 0.08),
+                              ),
+                            ),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(
+                      const ['여리게', '보통', '세게'][v - 1],
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white.withValues(alpha: 0.18),
+                      ),
+                    ),
                   ),
                 ),
             ],
@@ -2631,17 +3441,25 @@ class _OrderRow extends StatelessWidget {
   /// 그 화성을 따라 걸을 수 있어(코드 단계에 추천 배지를 단다). 순서를 굳이
   /// 안 바꿔도 되는 이유를 사용자에게 보여 준다.
   final bool recommended;
+
+  /// 이 단계가 지금 쓰는 악기 이름 — 눌러서 바꾼다(`onPickInstrument`).
+  final String instrument;
+  final VoidCallback onPickInstrument;
   const _OrderRow({
     required super.key,
     required this.stage,
     required this.index,
+    required this.instrument,
+    required this.onPickInstrument,
     this.recommended = false,
   });
 
+  // `_DoodlePlayViewState._stageColor()`와 같은 값(`DS.*`) — 순서 정하기
+  // 화면과 실제 연주 화면에서 같은 악기가 다른 색으로 보이면 안 된다.
   Color get _color => switch (stage.kind) {
-    DoodleKind.drum => Colors.lightGreenAccent,
-    DoodleKind.bass => Colors.lightBlueAccent,
-    DoodleKind.chord => Colors.purpleAccent,
+    DoodleKind.drum => DS.trackDrum,
+    DoodleKind.bass => DS.trackBass,
+    DoodleKind.chord => DS.trackChord,
   };
 
   @override
@@ -2682,6 +3500,36 @@ class _OrderRow extends StatelessWidget {
                 fontWeight: FontWeight.w700,
                 fontSize: 15,
                 letterSpacing: 1,
+              ),
+            ),
+          ),
+          // 악기 칩 — 누르면 이 단계의 음색(코드·베이스)·킷(드럼)을 고른다.
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Material(
+              color: _color.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(16),
+              child: InkWell(
+                key: ValueKey('order-inst-$index'),
+                borderRadius: BorderRadius.circular(16),
+                onTap: onPickInstrument,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        instrument,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const Icon(Icons.arrow_drop_down, size: 18, color: Colors.white70),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),

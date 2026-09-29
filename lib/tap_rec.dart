@@ -307,10 +307,15 @@ class TapClock {
     this.countBeats = 4,
     this.beatsPerBar = 4,
     this.armedAtHead = false,
+    double? startBeat,
   }) {
     if (armedAtHead) {
       phase = TapPhase.count;
     }
+    // 첫 위치를 **알고 있으면**(되감기 직후) 첫 update 를 기준값으로 버리지 않고 그 자리부터
+    // 센다 — 안 그러면 미리 세기가 첫 틱만큼(~30ms) 늦게 끝나 판 머리에 친 탭이 「아직 미리
+    // 세기」로 버려진다.
+    _prev = startBeat;
   }
 
   TapPhase phase = TapPhase.wait;
@@ -420,4 +425,22 @@ bool doodleShouldSendMet({
 }) {
   if (phase != TapPhase.rec) return true;
   return isDrumStage || !drumsConfirmed;
+}
+
+/// 미리 세기 한 마디를 **판의 마지막 마디 자리**에 놓기 위한, 되감은 직후의 (들리는) 위치(0~1).
+///
+/// 두들플레이는 판을 되감고 곧바로 한 마디를 센 뒤 녹음한다. 예전엔 되감은 자리가 판 머리(0)라
+/// 미리 세기가 0~1마디, **녹음이 1마디째부터** 시작했고 위치→칸 계산이 루프 위치 그대로라 첫 마디에
+/// 친 것이 **2마디째 칸**에, 마지막 마디에 친 것이 첫 마디 칸에 담겼다(마디가 통째로 한 마디 밀림).
+/// 판 머리를 [leadSec] 만큼 미뤄(`setLoop(startDelaySec:)`) 미리 세기가 판 끝쪽에 오게 하면 카운트가
+/// 끝나는 순간이 정확히 판 0 이 된다. [bufferedSec] 는 귀에 들리기까지 쌓인 양(들리는 자리 = 렌더 -
+/// 그만큼).
+double leadInStartPos({
+  required double loopSec,
+  required double leadSec,
+  double bufferedSec = 0,
+}) {
+  if (loopSec <= 0 || leadSec <= 0 || leadSec >= loopSec) return 0;
+  final p = (loopSec - leadSec - bufferedSec) / loopSec;
+  return ((p % 1.0) + 1.0) % 1.0;
 }

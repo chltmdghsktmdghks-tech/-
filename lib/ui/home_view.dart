@@ -10,6 +10,7 @@
 import 'package:flutter/material.dart';
 
 import '../audio_isolate.dart';
+import '../fx.dart' show masterPresetForGenre;
 import '../genres.dart' show genreDef, kGenres;
 import '../presets.dart';
 import '../project.dart';
@@ -18,6 +19,8 @@ import '../ask_song.dart';
 import 'ask_sheet.dart';
 import 'design.dart';
 import 'doodle_play_view.dart';
+import 'doodle_setup_sheet.dart';
+import 'new_project_choice_sheet.dart';
 import 'settings_sheet.dart';
 import 'workspace_view.dart';
 
@@ -185,10 +188,23 @@ class _HomeViewState extends State<HomeView> {
     _busy = true;
     try {
       final typed = await _askNewProjectName(context);
-      if (typed == null) return;
-      await store?.newSong(name: typed.trim().isEmpty ? null : typed.trim());
-      if (!mounted) return;
-      _openWorkspace(context);
+      if (typed == null || !mounted) return;
+      final name = typed.trim().isEmpty ? null : typed.trim();
+      // **만들기 전에** 어떻게 시작할지 고르게 한다 — 곡을 먼저 만들어 두고
+      // 시트를 띄우면 취소했을 때 빈 프로젝트가 목록에 남는다. 고른 뒤에야
+      // 만든다(생성 보류): 어느 갈래든 도중에 닫으면 아무것도 안 생긴다.
+      final mode = await showNewProjectChoiceSheet(context);
+      if (mode == null || !mounted) return;
+      switch (mode) {
+        case NewProjectMode.ask:
+          await _askSongFlow(name: name);
+        case NewProjectMode.doodle:
+          await _doodlePlayFlow(name: name);
+        case NewProjectMode.scratch:
+          await store?.newSong(name: name, blank: true);
+          if (!mounted) return;
+          _openWorkspace(context);
+      }
     } finally {
       _busy = false;
     }
@@ -232,15 +248,24 @@ class _HomeViewState extends State<HomeView> {
     if (_busy) return;
     _busy = true;
     try {
+      await _askSongFlow();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// [_askSong] 의 본체 — [name] 이 있으면 새 프로젝트 흐름에서 이미 지은 이름.
+  Future<void> _askSongFlow({String? name}) async {
+    {
       await showAskSheet(
       context,
       onDone: (ans) async {
-        final r = askRecipe(ans, pick: DateTime.now().second);
+        final r = askRecipe(ans, pick: DateTime.now().millisecondsSinceEpoch % 100000);
         // 새 곡으로 남긴다 — 답해서 만든 것이 지금 곡을 덮으면 그게 제일 나쁘다.
         // `_doodlePlay` 와 같은 순서다: 먼저 새 빈 곡을 만들어(지금 곡은 저장되고
         // `project` 는 새 파일을 가리킨다) 그 위에 AI 생성 결과를 얹는다. 이걸
         // 빼면 `saveNow` 가 지금 열려 있던 곡 파일을 AI 곡으로 소리 없이 덮어썼다.
-        await store?.newSong();
+        await store?.newSong(name: name);
         applyAsk(project, transport, ans, r);
         await store?.saveNow();
         if (!mounted) return;
@@ -253,14 +278,12 @@ class _HomeViewState extends State<HomeView> {
                 style: const TextStyle(fontSize: 12.5),
               ),
               behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 5),
+              duration: const Duration(seconds: 3),
             ),
           );
         _openWorkspace(context);
       },
       );
-    } finally {
-      _busy = false;
     }
   }
 
@@ -274,26 +297,60 @@ class _HomeViewState extends State<HomeView> {
     if (_busy) return;
     _busy = true;
     try {
+      await _doodlePlayFlow();
+    } finally {
+      _busy = false;
+    }
+  }
+
+  /// [_doodlePlay] 의 본체 — [name] 은 새 프로젝트 흐름에서 이미 지은 이름.
+  Future<void> _doodlePlayFlow({String? name}) async {
+    {
       final genre = await _pickGenreForDoodle();
       if (genre == null || !mounted) return;
-      await store?.newSong();
-      project.setGenre(genre);
-    // `setGenre` 는 `Project` 안의 장르 이름만 바꾼다 — 실제 재생 빠르기·조는
+      // 장르를 고른 **다음**, 실제로 새 곡을 만들기 **전에** 빠르기·조·마디를
+      // 확정받는다 — 여기서 취소하면 아무것도 안 바뀐 채로 끝난다(사용자
+      // 지시, 2026-09-29: "두들 시작 전에 이 넷을 고르게 한다").
+      final g = genreDef(genre);
+      final setup = await showDoodleSetupSheet(
+        context,
+        genre: g,
+        initialRoot: transport.root,
+      );
+      if (setup == null || !mounted) return;
+      // 빈 프로젝트로 시작한다 — 두들은 **친 트랙만, 한 씬만** 남아야 한다
+      // (2026-09-29 (12)). `newSong()` 기본은 로파이 뼈대, `setGenre` 는 송폼·편성까지
+      // 깔아서 남의 악기·다른 씬이 채워졌다. 소리 몫(음색·킷·믹스)만 얕게 얹는다.
+      await store?.newSong(name: name, blank: true);
+      project.setGenreBare(genre);
+      // 빈 시작이라 `newSong` 은 장르 없는 마스터링을 얹었다 — 고른 장르 몫으로 맞춘다.
+      store?.master.applyGenrePreset(masterPresetForGenre(genre));
+    // `setGenreBare` 는 `Project` 안의 장르 이름만 바꾼다 — 실제 재생 빠르기·조는
     // `Transport`(딴 객체)에 있어서 따로 옮겨야 한다("질문에 답해서 곡
     // 만들기"의 `applyAsk`도 같은 이유로 이렇게 한다). 안 옮기면 이전 곡의
     // BPM이 그대로 남아 새 장르인데 엉뚱한 빠르기로 두드리게 된다.
-    final g = genreDef(genre);
+    // 여기서는 장르 기본값(g.bpm/g.mode) 대신 **설정 시트에서 확정한 값**을
+    // 쓴다 — root 도 이전엔 아예 안 옮겨서 이전 곡의 조가 그대로 남는
+    // 버그가 있었다(2026-09-29 수정).
+    // **`transport.bpm` 만 쓰면 안 된다** — `setGenre` 가 씬마다 장르 기본 빠르기를
+    // 심어 두고 씬 칩·타임라인은 씬 값을 우선하므로, 씬을 누르는 순간 되돌아간다.
+    // `setBpm` 이 Transport 와 scene.bpm 을 같이 쓴다.
+    project.setBpm(transport, setup.bpm);
     transport
-      ..bpm = g.bpm
-      ..mode = g.mode;
+      ..root = setup.root
+      ..mode = setup.mode;
     if (!mounted) return;
-    await openDoodlePlay(context, project: project, transport: transport, host: host);
+    await openDoodlePlay(
+      context,
+      project: project,
+      transport: transport,
+      host: host,
+      initialBars: setup.bars,
+    );
     if (!mounted) return;
     await store?.saveNow();
     if (!mounted) return;
     _openWorkspace(context);
-    } finally {
-      _busy = false;
     }
   }
 
@@ -415,7 +472,8 @@ class _HomeViewState extends State<HomeView> {
       SnackBar(
         content: Text('「${gone.meta.name}」 을 지웠습니다'),
         behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 6),
+        duration: const Duration(seconds: 2),
+        persist: false, // action 이 있으면 기본 persist=true → duration 무시하고 영원히 떠 있었다
         action: SnackBarAction(
           label: '되돌리기',
           onPressed: () async {
@@ -523,14 +581,31 @@ class _HomeViewState extends State<HomeView> {
               Text(
                 '${songs.length}개',
                 style: const TextStyle(
-                  fontSize: 11.5,
-                  color: Colors.white38,
+                  fontSize: 12,
+                  color: Colors.white54,
                   fontFeatures: [FontFeature.tabularFigures()],
                 ),
               ),
           ],
         ),
         const SizedBox(height: 12),
+        // 빈 상태 — 카드가 「새 프로젝트」 하나뿐이면 "다 사라졌나?"로 보인다.
+        // 저장된 게 정말 없을 때(불러오기 끝난 뒤)만 무엇을 하면 되는지 알린다.
+        if (store != null && songs.isEmpty) ...[
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Text(
+              _filterGenre == null
+                  ? '아직 만든 곡이 없어요. 위에서 하나 골라 시작해 보세요.'
+                  : '이 장르로 만든 곡이 아직 없어요.',
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: Colors.white60,
+              ),
+            ),
+          ),
+        ],
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -595,7 +670,7 @@ class _HomeViewState extends State<HomeView> {
             const SizedBox(height: 4),
             const Text(
               '바로 열어서 만지고 배울 수 있는 완성곡입니다 — 내 프로젝트처럼 직접 고칠 수 있어요.',
-              style: TextStyle(fontSize: 11.5, color: Colors.white38),
+              style: TextStyle(fontSize: 11.5, color: Colors.white54),
             ),
             const SizedBox(height: 12),
             GridView.builder(
@@ -629,7 +704,7 @@ class _HomeViewState extends State<HomeView> {
                 // 둔다. 두 줄이 되면 둘째 줄이 화면 밖으로 잘렸다(실기기 확인,
                 // 2026-09-22 — "…오갈 수 있어" 다음 "요"가 안 보였다).
                 '씬·타임라인·라이브·쇼를 오갈 수 있어요.',
-                style: TextStyle(fontSize: 12, color: Colors.white38),
+                style: TextStyle(fontSize: 12, color: Colors.white54),
               ),
             ),
             TextButton.icon(
@@ -857,24 +932,28 @@ class _FilterRow extends StatelessWidget {
     );
   }
 
+  // **`GestureDetector`였다 — 눌러도 반응이 안 보였다**(디자인 감사,
+  // 2026-09-29). 켜진 칩은 색이 바뀌어 결과는 보이지만, 누르는 그 순간엔
+  // 손끝에 아무 신호가 없다 — `InkWell` 물결로 "지금 눌렸다"를 더한다.
   Widget _chip(BuildContext context, String label, bool on, VoidCallback onTap) {
     return Padding(
       padding: const EdgeInsets.only(right: 7),
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: on ? Colors.tealAccent.shade400 : Colors.white10,
-            borderRadius: BorderRadius.circular(17),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: on ? FontWeight.w800 : FontWeight.w600,
-              color: on ? Colors.black : Colors.white70,
+      child: Material(
+        color: on ? Colors.tealAccent.shade400 : Colors.white10,
+        borderRadius: BorderRadius.circular(17),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(17),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            alignment: Alignment.center,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: on ? FontWeight.w800 : FontWeight.w600,
+                color: on ? Colors.black : Colors.white70,
+              ),
             ),
           ),
         ),
@@ -1279,15 +1358,15 @@ class _NewProjectCard extends StatelessWidget {
                   BorderSide(color: Colors.white38, width: 1.4),
                 ),
               ),
-              child: const Icon(Icons.add, color: Colors.white54, size: 18),
+              child: const Icon(Icons.add, color: Colors.white70, size: 20),
             ),
             const SizedBox(height: 8),
             const Text(
               '새 프로젝트',
               style: TextStyle(
-                fontSize: 12.5,
+                fontSize: 13,
                 fontWeight: FontWeight.w700,
-                color: Colors.white54,
+                color: Colors.white70,
               ),
             ),
           ],
@@ -1454,7 +1533,10 @@ class _Start extends StatelessWidget {
       onTap: onTap,
       borderRadius: BorderRadius.circular(11),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+        // 세로 9 → 13: 손가락 가장 자주 닿는 두 입구라 카드를 키우고
+        // 설명 글자를 읽히게 했다(전: 10.5px·white38·한 줄 잘림).
+        constraints: const BoxConstraints(minHeight: 64),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         decoration: BoxDecoration(
           color: Colors.teal.withValues(alpha: 0.13),
           borderRadius: BorderRadius.circular(11),
@@ -1462,8 +1544,8 @@ class _Start extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Text(icon, style: const TextStyle(fontSize: 17)),
-            const SizedBox(width: 10),
+            Text(icon, style: const TextStyle(fontSize: 24)),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1473,18 +1555,23 @@ class _Start extends StatelessWidget {
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w800),
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800),
                   ),
+                  const SizedBox(height: 2),
                   Text(
                     desc,
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 10.5, color: Colors.white38),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      height: 1.3,
+                      color: Colors.white60,
+                    ),
                   ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, size: 17, color: Colors.white30),
+            const Icon(Icons.chevron_right, size: 22, color: Colors.white54),
           ],
         ),
       ),

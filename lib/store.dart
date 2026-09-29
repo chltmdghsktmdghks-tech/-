@@ -623,6 +623,11 @@ class Store extends ChangeNotifier {
     if (!await f.exists()) return;
     try {
       final j = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      // **임시 Project 에 먼저 읽어 본다.** `loadJson` 은 이름·트랙을 먼저 갈아 끼우고
+      // 씬을 나중에 읽어서, 중간에 터지면 지금 곡이 반쪽짜리가 된다 — 그런데
+      // `currentId` 는 옛 곡이라 다음 자동 저장이 옛 파일을 덮어쓴다. 여기서 터지면
+      // 지금 곡은 손도 안 댄 채 catch 로 간다.
+      Project.initial().loadJson(j);
       _loading = true;
       project.loadJson(j);
       // 없는 값은 **그 곡의 스타일 기본값**으로 떨어뜨린다 — 지금 열려 있던 곡의
@@ -712,9 +717,17 @@ class Store extends ChangeNotifier {
     live.restore(vol: 1.0, rev: 0.18, auto: true);
   }
 
-  Future<void> newSong({String? name}) async {
+  /// [blank] 가 참이면 **장르를 안 씌운 빈 프로젝트**(씬 1개·전부 쉼)로 만든다 —
+  /// 새 프로젝트 흐름의 「처음부터 직접 만들기」. 기본(거짓)은 예전 그대로
+  /// 로파이 뼈대라, 곧바로 장르를 얹어 쓰는 호출들(질문·두들)이 기대는 값이다.
+  Future<void> newSong({String? name, bool blank = false}) async {
     await saveNow();
-    project.reset(newName: name ?? '새 곡 ${songs.length + 1}');
+    final nm = name ?? '새 곡 ${songs.length + 1}';
+    if (blank) {
+      project.resetBlank(newName: nm);
+    } else {
+      project.reset(newName: nm);
+    }
     _syncTransportToGenre();
     _resetChannels();
     await _createFrom(project, name: project.name);
@@ -888,7 +901,7 @@ class Store extends ChangeNotifier {
 
   Future<void> saveNow() async {
     final id = currentId;
-    if (id == null || _loading) return;
+    if (id == null || _loading || project.transientEdit) return;
     try {
       await _write(await _songFile(id), jsonEncode(_snapshot()));
       for (final s in songs) {

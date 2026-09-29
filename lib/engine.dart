@@ -19,6 +19,17 @@ export 'synth.dart' show kPartBass, kPartChord, kPartMelody;
 const int kChannels = 2; // 스테레오 — 유니즌 폭·악기 위치가 들려야 한다
 const int kPolyphony = 96;
 
+/// 808 홀드 시간 → 꼬리(초). 1:1 이 기본 — 0.3초 눌렀으면 0.3초 꼬리, 2초 눌렀으면 2초.
+/// 너무 짧으면 툭, 너무 길면 다음 박을 잡아먹으니 [min, max] 로 가둔다.
+double boomTailFor(double holdSec, {double gain = 1.0, double min = 0.08, double max = 3.5}) =>
+    (holdSec * gain).clamp(min, max).toDouble();
+
+/// 사이드체인 펌핑이 「자동 ON」인 장르(하우스/EDM 계열)와 그때의 대상 버스·복귀 시간.
+/// 그 밖의 장르는 펌핑 없음(0). 깊이는 장르 표(`kGenreDuck`)의 값을 그대로 쓴다.
+const Set<String> kPumpGenres = {'house', 'proghouse'};
+const List<String> kPumpBuses = ['bass', 'chord'];
+const double kPumpRelSec = 0.22; // 128BPM 한 박(0.47s)의 절반 안에 돌아온다 — 숨 쉬듯 펌핑
+
 const int kDrumPolyphony = 24; // 드럼은 한 순간에 훨씬 적게 겹친다 (16분 하이햇 + 킥/스네어 정도)
 
 class Engine {
@@ -79,10 +90,84 @@ class Engine {
     _duckRel = math.exp(-1 / (sec.clamp(0.02, 1.0) * kSampleRate));
   }
 
+  // ── 사이드체인 펌핑 대상 (2026-09-29) ──
+  // null(기본) = 예전 그대로 「드럼 빼고 전부」가 눌린다. 이름 목록이 있으면 **그 버스만**
+  // 킥에 눌린다 — 하우스/EDM 은 코드·베이스만 펌핑하고 멜로디는 안 흔들리는 게 자연스럽다.
+  Set<String>? _duckNames;
+  final List<bool> _duckMask = List<bool>.filled(16, false);
+  bool _duckLive = false;
+
+  /// 킥 덕이 걸릴 버스 이름들(`bass`·`chord`·`live` …). null 이면 전부(기본).
+  void setDuckBuses(Iterable<String>? names) {
+    _duckNames = names == null ? null : Set<String>.of(names);
+  }
+
+  Set<String>? get duckBuses => _duckNames;
+
+  // ── 스웰: 버스 볼륨 오토메이션 (2026-09-29) ──
+  // 패드/스트링이 「차오르는」 소리. 호출부가 진행도(0→1)를 실시간으로 밀어 넣거나
+  // (`setSwell`), 목표 시간만 주면(`startSwell`) 엔진이 알아서 올린다. 1.0 = 원래 소리
+  // (곱하지 않는다 — 안 쓰면 기존 곡 결과가 한 비트도 안 바뀐다).
+  static const int _kSwellMax = 16;
+  final Float64List _swCur = Float64List(_kSwellMax)..fillRange(0, _kSwellMax, 1.0);
+  final Float64List _swTgt = Float64List(_kSwellMax)..fillRange(0, _kSwellMax, 1.0);
+  final Float64List _swRate = Float64List(_kSwellMax);
+  bool _swAny = false;
+
+  int _swIdx(String bus) {
+    final i = trackMix.slotNames.indexOf(bus);
+    return (i >= 0 && i < _kSwellMax && i < trackMix.slots.length) ? i : -1;
+  }
+
+  /// [bus] 의 스웰 진행도를 [level](0~1)로 **민다** — 화면 제스처가 매 프레임 불러도 된다.
+  /// 값은 [smoothSec] 안에 부드럽게 따라간다(지퍼 잡음 방지). 소리 크기는 level² (귀에 고르게).
+  void setSwell(String bus, double level, {double smoothSec = 0.03}) {
+    final i = _swIdx(bus);
+    if (i < 0) return;
+    _swTgt[i] = level.clamp(0.0, 1.0).toDouble();
+    _swRate[i] = 1.0 / (math.max(0.002, smoothSec) * kSampleRate);
+    _swAny = true;
+  }
+
+  /// [bus] 를 [from] 에서 1.0 까지 [sec] 초에 걸쳐 올린다(시간 기반 — 목표 시간만 알 때).
+  void startSwell(String bus, double sec, {double from = 0}) {
+    final i = _swIdx(bus);
+    if (i < 0) return;
+    _swCur[i] = from.clamp(0.0, 1.0).toDouble();
+    _swTgt[i] = 1.0;
+    _swRate[i] = 1.0 / (math.max(0.01, sec) * kSampleRate);
+    _swAny = true;
+  }
+
+  /// 스웰을 다 걷는다(전부 1.0).
+  void clearSwell() {
+    _swCur.fillRange(0, _kSwellMax, 1.0);
+    _swTgt.fillRange(0, _kSwellMax, 1.0);
+    _swAny = false;
+  }
+
+  /// 지금 그 버스의 스웰 값(0~1, 1 = 안 눌림) — 진단·시험용.
+  double swellLevel(String bus) {
+    final i = _swIdx(bus);
+    return i < 0 ? 1.0 : _swCur[i];
+  }
+
   /// 지금 사이드체인 덕 값 — 1 이면 안 눌림, 작을수록 세게 눌림.
   /// **진단·시험용.** `clipped`·`starved`처럼 내부 상태를 밖에서 확인하는 자리다 —
   /// 목소리를 못 얻은 킥도 덕은 걸어야 한다는 약속을 시험이 지킨다.
   double get duckLevel => _duck;
+
+  // ── 메트로놈 덕킹 ── 클릭이 켜지는 프레임에 반주(슬롯·드럼)를 살짝 눌렀다 놓는다.
+  // 킥 덕(`_duck`)과 별개 — 그건 장르가 꺼 두면 아예 안 돈다. 이건 클릭마다 자동 복귀라
+  // 상태가 남지 않는다(hold 가 0 이 되면 목표가 1 로 돌아온다).
+  double _mduck = 1.0;
+  int _mduckHold = 0;
+  final int _mduckHoldFrames = (kMetroDuckHoldSec * kSampleRate).round();
+  final double _mduckAtk = math.exp(-1 / (0.002 * kSampleRate));
+  final double _mduckRel = math.exp(-1 / (0.012 * kSampleRate));
+
+  /// 지금 메트로놈 덕 값(1=안 눌림) — 진단·시험용.
+  double get metroDuckLevel => _mduck;
 
   /// 5단계 47/N — **마스터 인서트.** 마스터 버스 뒤, 리미터 앞에 낀다.
   /// 마스터링 플러그인(그래픽 EQ·컴프·리미터)이 여기 꽂힌다.
@@ -146,6 +231,9 @@ class Engine {
   };
   int get drumActiveCount => _liveDrums.length;
 
+  /// 지금 울리는 하이햇 목소리 수 — 초킹(킥·다음 하이햇이 열린 하이햇을 닫는 것) 시험용.
+  int get liveHatCount => _liveDrums.where((d) => d.inst == 'hat').length;
+
   void resetStats() {
     callbacks = 0;
     maxActive = 0;
@@ -174,6 +262,7 @@ class Engine {
     bool soft = false,
     double glideF = 0,
     int part = kPartMelody,
+    double tailSec = 0,
   }) {
     if (_free.isEmpty) {
       starved++;
@@ -186,6 +275,7 @@ class Engine {
       freq,
       dur,
       vel,
+      tailSec: tailSec,
       soft: soft,
       glideF: glideF,
       highQuality: highQuality,
@@ -255,10 +345,13 @@ class Engine {
   }
 
   /// 잡아 둔 소리를 놓는다. 모르는 [id] 면 아무 일도 안 한다.
-  void noteRelease(int id) {
+  ///
+  /// [tailSec] > 0 이면 **꼬리를 그만큼으로** 놓는다 — 808 서브 홀드: 킥/베이스를 누르고 있던
+  /// 시간을 그대로 꼬리로 넘기면(`boomTailFor`) 짧게 = 툭, 길게 = 길게 운다.
+  void noteRelease(int id, {double tailSec = 0}) {
     final n = _held.remove(id);
     if (n == null) return;
-    n.release();
+    n.release(tailSec: tailSec);
   }
 
   /// 잡고 있는 것 전부 놓는다 — 화면을 나가거나 멈출 때.
@@ -279,7 +372,39 @@ class Engine {
   final Map<int, SynthNote> _held = {};
 
   /// 드럼 타격 하나. [inst] 는 kick/snare/hat/tom/crash/ride/rim/clap/shake/cow.
-  void drumOn(String kitName, String inst, int vel, {double tomFreq = 180}) {
+  /// 808 붐 홀드 킥 — 손가락 번호 → 잡고 있는 드럼 목소리.
+  final Map<int, DrumVoice> _heldDrums = {};
+  int get heldDrumCount => _heldDrums.length;
+
+  /// 킥을 **누르고 있는 동안** 서브가 유지된다. [drumRelease] 로 놓으면 그때 꼬리가 진다.
+  /// 같은 [id] 로 다시 부르면 앞의 것을 먼저 놓는다.
+  void drumHold(int id, String kitName, int vel, {double maxTailSec = 0.7}) {
+    drumRelease(id, tailSec: maxTailSec);
+    final voice = drumOn(kitName, 'kick', vel, holdBoom: true);
+    if (voice != null) _heldDrums[id] = voice;
+  }
+
+  /// 잡아 둔 킥을 놓는다 — [tailSec] 동안 서브가 사그라든다. 모르는 [id] 면 아무 일도 안 한다.
+  void drumRelease(int id, {double tailSec = 0.7}) {
+    final d = _heldDrums.remove(id);
+    d?.releaseBoom(tailSec);
+  }
+
+  /// 드럼 타격 하나를 켜고 그 목소리를 돌려준다(못 얻으면 null).
+  /// [tailSec] > 0 이면 킥이 808 붐(서브 꼬리). 'hatopen' 이면 열린 하이햇(길게 지잉).
+  DrumVoice? drumOn(
+    String kitName,
+    String inst,
+    int vel, {
+    double tomFreq = 180,
+    double tailSec = 0,
+    bool holdBoom = false,
+  }) {
+    var longOpen = false;
+    if (inst == 'hatopen') {
+      inst = 'hat';
+      longOpen = true;
+    }
     // 킥이 치는 순간 나머지가 비켜 준다(사이드체인). 목소리를 못 얻어도
     // **비켜 주는 것은 한다** — 킥이 났다는 사실은 변함이 없다.
     //
@@ -290,20 +415,34 @@ class Engine {
     if (duckAmount > 0 && inst == 'kick') _duck = 1 - duckAmount;
     if (_freeDrums.isEmpty) {
       drumStarved++;
-      return;
+      return null;
     }
     // 하이햇은 **하나뿐인 악기**다 — 닫으면 열려 있던 소리가 멎는다(초킹).
     // 이게 없으면 열린 하이햇이 다음 박까지 겹쳐 울려서 드럼이 아니라 심벌 뭉치가 된다.
-    if (inst == 'hat') {
+    // 킥도 **열린** 하이햇을 닫는다(2026-09-29) — 실제 하이햇 페달 거동. 닫힌 하이햇은
+    // 원래 짧아서 건드리지 않는다(킥이 칠 때마다 16분 하이햇이 잘리면 안 된다).
+    if (inst == 'hat' || inst == 'kick') {
       for (final d in _liveDrums) {
-        if (d.inst == 'hat') d.choke();
+        if (d.inst == 'hat' && (inst == 'hat' || d.openHat)) {
+          d.choke(inst == 'kick' ? 0.02 : 0.012);
+        }
       }
     }
     final kit = DRUM_KITS[kitName] ?? DRUM_KITS['acoustic']!;
     final d = _freeDrums.removeLast();
-    d.trigger(inst, kit, vel, tomFreq: tomFreq, highQuality: highQuality);
+    d.trigger(
+      inst,
+      kit,
+      vel,
+      tomFreq: tomFreq,
+      highQuality: highQuality,
+      tailSec: tailSec,
+      holdBoom: holdBoom,
+      longOpen: longOpen,
+    );
     _liveDrums.add(d);
     if (_liveDrums.length > maxActiveDrums) maxActiveDrums = _liveDrums.length;
+    return d;
   }
 
   void allOff() {
@@ -313,6 +452,8 @@ class Engine {
     }
     _live.clear();
     _held.clear(); // 다 껐으니 잡고 있는 것도 없다
+    _heldDrums.clear();
+    clearSwell();
     for (final d in _liveDrums) {
       d.reset();
       _freeDrums.add(d);
@@ -351,11 +492,16 @@ class Engine {
     bool soft = false,
     double glideF = 0,
     int part = kPartMelody,
+    double tailSec = 0,
   }) {
     _queue.add(
       _Sched(
-        // 사람처럼 조금 흔든다 — `Human.setLevel(0)` 이면 아무것도 안 한다
-        _now + (humanNudge(delaySec) * kSampleRate).round(),
+        // 사람처럼 조금 흔든다 — `Human.setLevel(0)` 이면 아무것도 안 한다.
+        // 단 메트로놈은 **박을 재는 소리**라 흔들지 않는다(±5.5ms 흔들리면 잣대가 아니다).
+        _now +
+            ((part == kPartMetro ? delaySec : humanNudge(delaySec)) *
+                    kSampleRate)
+                .round(),
         _seq++,
         voice,
         freq,
@@ -364,6 +510,7 @@ class Engine {
         soft,
         glideF,
         part,
+        tailSec,
       ),
     );
     _qDirty = true;
@@ -379,6 +526,7 @@ class Engine {
     String inst,
     int vel, {
     double tomFreq = 180,
+    double tailSec = 0,
   }) {
     _drumQueue.add(
       _DrumSched(
@@ -390,6 +538,7 @@ class Engine {
         inst,
         vel,
         tomFreq,
+        tailSec,
       ),
     );
     _dDirty = true;
@@ -398,6 +547,7 @@ class Engine {
   void clearSchedule() {
     _queue.clear();
     _drumQueue.clear();
+    _mduckHold = 0; // 멈추면 눌린 채로 남지 않게
     _qHead = 0;
     _dHead = 0;
     _qDirty = false;
@@ -474,6 +624,7 @@ class Engine {
         // 지금 켤 음들 — 앞에서부터 인덱스만 민다
         while (_qHead < _queue.length && _queue[_qHead].at <= _now) {
           final s = _queue[_qHead++];
+          if (s.part == kPartMetro) _mduckHold = _mduckHoldFrames;
           noteOn(
             s.voice,
             s.freq,
@@ -482,11 +633,12 @@ class Engine {
             soft: s.soft,
             glideF: s.glide,
             part: s.part,
+            tailSec: s.tail,
           );
         }
         while (_dHead < _drumQueue.length && _drumQueue[_dHead].at <= _now) {
           final s = _drumQueue[_dHead++];
-          drumOn(s.kit, s.inst, s.vel, tomFreq: s.tomFreq);
+          drumOn(s.kit, s.inst, s.vel, tomFreq: s.tomFreq, tailSec: s.tail);
         }
         continue;
       }
@@ -499,6 +651,13 @@ class Engine {
       final accL = _accL, accR = _accR;
       // 청크마다 한 번만 — 샘플마다 곱셈 세 번 안 하게
       final mg = masterGain * userGain * styleGain;
+      final dn = _duckNames;
+      if (dn != null) {
+        for (var s = 0; s < nSlots && s < _duckMask.length; s++) {
+          _duckMask[s] = dn.contains(trackMix.slotNames[s]);
+        }
+        _duckLive = dn.contains('live');
+      }
 
       for (var k = 0; k < chunk; k++) {
         // 4단계 4/N·5/N — 슬롯별로 따로 합산한 뒤 트랙 버스(TrackMix)를 태운다.
@@ -517,6 +676,11 @@ class Engine {
             lvR += n.outR;
             continue;
           }
+          if (si == kPartMetro) {
+            lvL += n.outL * kMetroGain;
+            lvR += n.outR * kMetroGain;
+            continue;
+          }
           if (si < 0 || si >= nSlots) si = nSlots - 1; // 편성 바뀌는 도중 남은 음 방어
           accL[si] += n.outL;
           accR[si] += n.outR;
@@ -529,12 +693,52 @@ class Engine {
           dR += d.outR;
         }
 
+        // 메트로놈 덕 — 클릭이 켜진 프레임부터 반주(슬롯·드럼)만 누른다(라이브 버스는 그대로).
+        // 클릭이 없으면 정확히 1.0 이라 곱하지 않는다(기존 곡 스모크 기준값 유지).
+        if (_mduckHold > 0 || _mduck < 0.9999) {
+          final tgt = _mduckHold > 0 ? kMetroDuckGain : 1.0;
+          _mduck = tgt + (_mduck - tgt) * (tgt < _mduck ? _mduckAtk : _mduckRel);
+          if (_mduckHold > 0) _mduckHold--;
+          if (_mduck >= 0.9999 && _mduckHold == 0) _mduck = 1.0;
+          for (var s = 0; s < nSlots; s++) {
+            accL[s] *= _mduck;
+            accR[s] *= _mduck;
+          }
+          dL *= _mduck;
+          dR *= _mduck;
+        }
+
+        // 스웰 — 안 쓰면 이 블록을 아예 안 탄다.
+        if (_swAny) {
+          var still = false;
+          for (var s = 0; s < nSlots && s < _kSwellMax; s++) {
+            final t = _swTgt[s];
+            var c = _swCur[s];
+            if (c != t) {
+              final r = _swRate[s];
+              c = c < t ? (c + r < t ? c + r : t) : (c - r > t ? c - r : t);
+              _swCur[s] = c;
+            }
+            if (c != 1.0 || t != 1.0) still = true;
+            if (c < 1.0) {
+              final g = c * c;
+              accL[s] *= g;
+              accR[s] *= g;
+            }
+          }
+          if (!still) _swAny = false;
+        }
+
         // 슬롯 순서대로 합산 — 예전 (bl+cl+ml+dl) 과 정확히 같은 덧셈 순서를 유지한다
         // (기본 3슬롯일 때 부동소수점 결과가 한 비트도 안 달라야 스모크 테스트 기준값이
         // 그대로 유지된다).
         var l = 0.0, r = 0.0, sendL = 0.0, sendR = 0.0;
         for (var s = 0; s < nSlots; s++) {
-          final (pl, pr) = trackMix.slots[s].process(accL[s], accR[s]);
+          var (pl, pr) = trackMix.slots[s].process(accL[s], accR[s]);
+          if (dn != null && duckAmount > 0 && s < _duckMask.length && _duckMask[s]) {
+            pl *= _duck;
+            pr *= _duck;
+          }
           l += pl;
           r += pr;
           sendL += trackMix.slots[s].rev * pl;
@@ -542,7 +746,11 @@ class Engine {
         }
         // 라이브(건반) 버스 — 슬롯 뒤·드럼 앞에 더한다. 건반을 안 치면 lv 가 정확히 0 이라
         // 더해도 값이 안 바뀐다(기존 곡 스모크 기준값 유지).
-        final (ll, lr) = trackMix.live.process(lvL, lvR);
+        var (ll, lr) = trackMix.live.process(lvL, lvR);
+        if (dn != null && duckAmount > 0 && _duckLive) {
+          ll *= _duck;
+          lr *= _duck;
+        }
         l += ll;
         r += lr;
         sendL += trackMix.live.rev * ll;
@@ -551,10 +759,12 @@ class Engine {
         // ── 비켜 주기 ── 드럼을 더하기 **전**에 건다.
         // 즉 "드럼 빼고 전부"가 눌린다 — 킥은 그대로 뚫고 나온다.
         if (duckAmount > 0) {
-          l *= _duck;
-          r *= _duck;
-          sendL *= _duck;
-          sendR *= _duck;
+          if (dn == null) {
+            l *= _duck;
+            r *= _duck;
+            sendL *= _duck;
+            sendR *= _duck;
+          }
           _duck += (1 - _duck) * (1 - _duckRel);
         }
 
@@ -647,6 +857,9 @@ class Engine {
       for (var vi = _liveDrums.length - 1; vi >= 0; vi--) {
         if (!_liveDrums[vi].active) {
           final d = _liveDrums[vi];
+          if (_heldDrums.isNotEmpty) {
+            _heldDrums.removeWhere((_, v) => identical(v, d));
+          }
           d.reset();
           _freeDrums.add(d);
           _liveDrums.removeAt(vi);
@@ -680,6 +893,7 @@ class _Sched {
   final bool soft;
   final double glide;
   final int part;
+  final double tail; // 808 꼬리(초) — 0 이면 없음
   _Sched(
     this.at,
     this.seq,
@@ -690,6 +904,7 @@ class _Sched {
     this.soft,
     this.glide,
     this.part,
+    this.tail,
   );
 }
 
@@ -699,7 +914,16 @@ class _DrumSched {
   final String kit, inst;
   final int vel;
   final double tomFreq;
-  _DrumSched(this.at, this.seq, this.kit, this.inst, this.vel, this.tomFreq);
+  final double tail;
+  _DrumSched(
+    this.at,
+    this.seq,
+    this.kit,
+    this.inst,
+    this.vel,
+    this.tomFreq,
+    this.tail,
+  );
 }
 
 // ───────────────────────── 음이름 ↔ 주파수 ─────────────────────────

@@ -22,6 +22,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../genres.dart';
+import 'design.dart';
 
 /// 무대에 세울 연주자 하나.
 class BandMember {
@@ -410,7 +411,7 @@ class BandPainter extends CustomPainter {
     final s = scale * 0.85;
     final me = members.where((m) => m.type == 'drum');
     final muted = me.isNotEmpty && me.first.muted;
-    final kc = muted ? Colors.white24 : const Color(0xFF7CB342);
+    final kc = muted ? Colors.white24 : DS.trackDrum;
     final beat = muted ? 0.0 : kick;
     final sn = muted ? 0.0 : snare;
     final hh = muted ? 0.0 : hat;

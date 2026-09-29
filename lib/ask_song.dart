@@ -51,13 +51,13 @@ const List<AskQ> kAskQuestions = [
     ('mid2', '적당히', '기본 편성'),
     ('thin', '비워서', '악기 몇 개만 · 여백 많이'),
   ]),
-  AskQ('lead', '맨 앞에서 노래하는 건 누구였으면 해요?', '가장 잘 들리는 악기예요', [
+  AskQ('lead', '멜로디를 이끄는 소리는 어떤 느낌이 좋아요?', '가장 또렷하게 들리는 소리예요', [
     ('voice', '사람 목소리 같은 것', '노래하듯이'),
     ('bell', '맑고 반짝이는 것', '벨·종 같은'),
     ('warm', '따뜻한 관·현악기', '색소폰 같은'),
     ('synth', '또렷한 전자음', '신스 리드'),
   ]),
-  AskQ('low', '아래쪽 저음은 어땠으면 해요?', '베이스의 성격이에요', [
+  AskQ('low', '깔리는 낮은 소리는 어땠으면 해요?', '몸으로 느껴지는 저음이에요', [
     ('deep', '묵직하게 쿵', '가슴이 울리는 저음'),
     ('bounce', '통통 튀게', '움직이는 베이스'),
     ('soft', '부드럽게 받쳐만', '있는 듯 없는 듯'),
@@ -67,7 +67,7 @@ const List<AskQ> kAskQuestions = [
     ('normal', '보통', '같이 갑니다'),
     ('back', '뒤에서 조용히', '거의 안 나서게'),
   ]),
-  AskQ('space', '소리가 어떤 공간에 있었으면 해요?', '잔향(에코)의 양이에요', [
+  AskQ('space', '소리가 어떤 공간에 있었으면 해요?', '소리가 울리는 정도예요', [
     ('dry', '바로 앞에서', '건조하고 또렷하게'),
     ('room2', '작은 방', '자연스러운 울림'),
     ('hall', '넓은 홀', '멀리 퍼지는 울림'),
@@ -77,7 +77,7 @@ const List<AskQ> kAskQuestions = [
     ('m', '보통 (3분쯤)', '노래 한 곡 길이'),
     ('l', '길게 (4분 넘게)', '천천히 쌓이는'),
   ]),
-  AskQ('edge', '마지막으로 — 거칠게? 매끈하게?', '', [
+  AskQ('edge', '마지막으로, 소리의 질감은요?', '거칠게? 매끈하게?', [
     ('rough', '거칠게', '먼지 낀, 눌린'),
     ('clean', '매끈하게', '깨끗하고 또렷한'),
   ]),
@@ -171,40 +171,74 @@ class AskRecipe {
   final String mode;
   final double bpm;
   final double targetSec;
+
+  /// 답이 정한 악기 **후보 중 이번에 뽑힌 것**(없으면 null = 손대지 않음).
+  /// 같은 답도 [askRecipe] 의 `pick` 에 따라 다른 악기가 나온다.
+  final String? leadVoice;
+  final String? lowVoice;
   const AskRecipe({
     required this.genre,
     required this.root,
     required this.mode,
     required this.bpm,
     required this.targetSec,
+    this.leadVoice,
+    this.lowVoice,
   });
 }
 
+/// 답 하나에 어울리는 악기 **후보들** — 첫째가 기본(`pick` 0 이 늘 이걸 쓴다).
+/// 셋 다 서로 성격이 비슷한 것끼리라 어느 것이 뽑혀도 이상하지 않다.
+const Map<String, List<String>> kAskLeadVoices = {
+  'voice': ['vocal', 'flute'],
+  'bell': ['bell', 'marimba', 'harp'],
+  'warm': ['sax', 'clarinet', 'trumpet'],
+  'synth': ['saw', 'lead', 'moogleadv'],
+};
+const Map<String, List<String>> kAskLowVoices = {
+  'deep': ['moogbass', 'bass'],
+  'bounce': ['fingerbass', 'jbass'],
+  'soft': ['upright', 'fingerbass'],
+};
+
 /// 답 → 뼈대·조성·빠르기·길이. [pick] 은 조 후보 중 몇 번째를 쓸지(시험은 0).
+///
+/// **[pick] 이 결과를 흔든다** — 같은 답이라도 뼈대 곡(점수가 [kAskTieMargin] 이내인
+/// 것들 중), 조, 빠르기(±4%), 악기 후보가 `pick` 에 따라 바뀐다. **`pick` 0 은 늘
+/// 점수 1등·첫 후보·빠르기 그대로**(시험이 기대는 값). 화면은 시각에서 뽑은 값을 넘긴다.
 AskRecipe askRecipe(Map<String, String> a, {int pick = 0}) {
-  // 1) 뼈대 곡 — 답과 제일 잘 맞는 완성곡.
-  var best = 'pop';
-  var bestScore = -1;
+  final k = pick.abs();
+  // 1) 뼈대 곡 — 답과 제일 잘 맞는 완성곡. 점수가 거의 같은(margin 이내) 곡이
+  //    둘 이상이면 그 중에서 pick 이 고른다. 예전엔 무조건 1등 하나라
+  //    같은 답 = 같은 뼈대였다(그래서 결과가 뻔했다).
+  final scored = <(String, int)>[];
   for (final e in kAskFit.entries) {
     var sc = 0;
     for (final v in a.values) {
       sc += e.value[v] ?? 0;
     }
-    if (sc > bestScore) {
-      bestScore = sc;
-      best = e.key;
-    }
+    scored.add((e.key, sc));
   }
+  // 점수 내림차순, 같으면 표에 적힌 차례(안정 정렬).
+  final order = [...scored]..sort((x, y) => y.$2.compareTo(x.$2));
+  final top = order.first.$2;
+  final near = [
+    for (final c in order)
+      if (c.$2 >= top - kAskTieMargin && c.$2 > 0) c.$1,
+  ];
+  final best = near.isEmpty ? 'pop' : near[(k ~/ 3) % near.length];
   final g = genreDef(best);
 
   // 2) 조성 — 기분이 루트를 고른다.
   final roots = kAskRoot[a['mood']] ?? const [0];
-  final root = roots[pick.abs() % roots.length];
+  final root = roots[k % roots.length];
   final mode = a['mood'] == 'bright' ? 'major' : g.mode;
 
   // 3) 빠르기 — 뼈대 곡의 값을 기분에 맞게 당긴다.
   const spd = {'fast': 1.16, 'mid': 1.0, 'slow': 0.86, 'still': 0.72};
-  final bpm = (g.bpm * (spd[a['speed']] ?? 1.0)).clamp(60.0, 180.0);
+  const jitter = [1.0, 0.96, 1.04];
+  final bpm = (g.bpm * (spd[a['speed']] ?? 1.0) * jitter[(k ~/ 9) % 3])
+      .clamp(60.0, 180.0);
 
   // 4) 길이 — **초**로 잰다. 마디로 세면 빠르기에 따라 제멋대로가 된다
   //    (느린 곡을 「짧게」로 골랐는데 4분이 나온다).
@@ -217,8 +251,17 @@ AskRecipe askRecipe(Map<String, String> a, {int pick = 0}) {
     mode: mode,
     bpm: bpm,
     targetSec: target,
+    leadVoice: _nth(kAskLeadVoices[a['lead']], k ~/ 27),
+    lowVoice: _nth(kAskLowVoices[a['low']], k ~/ 81 + k % 2),
   );
 }
+
+/// 뼈대 곡 점수가 1등과 이만큼 이내면 「거의 같다」 — 후보에 든다.
+/// (답 열 개 합이 보통 10~15점이라 2점이면 한 답 정도의 차이다.)
+const int kAskTieMargin = 2;
+
+String? _nth(List<String>? xs, int i) =>
+    (xs == null || xs.isEmpty) ? null : xs[i % xs.length];
 
 /// 뼈대 곡 위에 나머지 답을 바른다. **[askRecipe] 뒤에 부른다.**
 void applyAsk(Project p, Transport tr, Map<String, String> a, AskRecipe r) {
@@ -238,14 +281,8 @@ void applyAsk(Project p, Transport tr, Map<String, String> a, AskRecipe r) {
   p.song.restore(fitted);
 
   // 맨 앞에서 노래하는 악기.
-  const leadVoice = {
-    'voice': 'vocal',
-    'bell': 'bell',
-    'warm': 'sax',
-    'synth': 'saw',
-  };
-  final lv = leadVoice[a['lead']];
-  if (lv != null) {
+  final lv = r.leadVoice ?? kAskLeadVoices[a['lead']]?.first;
+  if (lv != null && VOICE_LABEL.containsKey(lv)) {
     for (final t in p.tracks) {
       if (t.type == 'melody') {
         t.voice = lv;
@@ -255,16 +292,11 @@ void applyAsk(Project p, Transport tr, Map<String, String> a, AskRecipe r) {
   }
 
   // 저음 성격 — 음색·크기·저역 자르기.
-  const lowVoice = {
-    'deep': 'moogbass',
-    'bounce': 'fingerbass',
-    'soft': 'upright',
-  };
   const lowVol = {'deep': 1.14, 'bounce': 1.0, 'soft': 0.82};
   const lowHpf = {'deep': 20.0, 'bounce': 34.0, 'soft': 44.0};
   for (final t in p.tracks) {
     if (t.type != 'bass') continue;
-    final v = lowVoice[a['low']];
+    final v = r.lowVoice ?? kAskLowVoices[a['low']]?.first;
     if (v != null && VOICE_LABEL.containsKey(v)) t.voice = v;
     t.vol = t.vol * (lowVol[a['low']] ?? 1.0);
     final h = lowHpf[a['low']];

@@ -26,12 +26,13 @@ import 'prog_sheet.dart';
 import 'doodle_play_view.dart';
 import 'play_head.dart';
 import 'text_scale.dart';
+import 'design.dart';
 
 const _typeColor = {
-  'drum': Color(0xFF7CB342),
-  'bass': Color(0xFF42A5F5),
-  'chord': Color(0xFFAB47BC),
-  'melody': Color(0xFFFFA726),
+  'drum': DS.trackDrum,
+  'bass': DS.trackBass,
+  'chord': DS.trackChord,
+  'melody': DS.trackMelody,
 };
 
 class SceneView extends StatefulWidget {
@@ -182,7 +183,8 @@ class _SceneViewState extends State<SceneView> {
       SnackBar(
         content: Text(msg, style: const TextStyle(fontSize: 12.5)),
         behavior: SnackBarBehavior.floating,
-        duration: Duration(seconds: undo == null ? 3 : 7),
+        duration: Duration(seconds: undo == null ? 3 : 4),
+        persist: false,
         action: undo == null
             ? null
             : SnackBarAction(label: '되돌리기', onPressed: undo),
@@ -941,7 +943,8 @@ class _SceneBar extends StatelessWidget {
                               : '「$name」 을 지웠습니다',
                         ),
                         behavior: SnackBarBehavior.floating,
-                        duration: const Duration(seconds: 6),
+                        duration: const Duration(seconds: 4),
+                        persist: false,
                         action: SnackBarAction(
                           label: '되돌리기',
                           onPressed: () {

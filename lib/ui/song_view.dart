@@ -43,6 +43,7 @@ import 'editor_view.dart' show followTarget;
 import 'mixer_view.dart' show showChannelSheet;
 import 'scene_view.dart' show pickPatternSheet;
 import 'play_head.dart';
+import 'design.dart';
 
 /// 스타일을 바꾼 뒤 **손으로 고친 판이 어떻게 됐는지** 한 줄로 말해 준다.
 ///
@@ -339,7 +340,8 @@ class _SongViewState extends State<SongView> {
             style: const TextStyle(fontSize: 12.5),
           ),
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 6),
+          duration: const Duration(seconds: 4),
+          persist: false,
           action: SnackBarAction(
             label: '되돌리기',
             onPressed: () {
@@ -498,10 +500,10 @@ String _mmss(double sec) {
 /// 트랙 종류별 색 — 구간 줄·타임라인 블록에 「무엇이 들어 있나」를 띠로 보여 준다.
 /// (쇼 화면과 같은 색을 쓴다 — 한 곡을 두 화면에서 다른 색으로 보면 헷갈린다)
 const _typeColor = {
-  'drum': Color(0xFF7CB342),
-  'bass': Color(0xFF42A5F5),
-  'chord': Color(0xFFAB47BC),
-  'melody': Color(0xFFFFA726),
+  'drum': DS.trackDrum,
+  'bass': DS.trackBass,
+  'chord': DS.trackChord,
+  'melody': DS.trackMelody,
 };
 
 /// 그 씬에서 **소리 나는 트랙 종류**들 — 순서는 늘 드럼·베이스·코드·멜로디.
@@ -1523,7 +1525,8 @@ class _Timeline extends StatelessWidget {
                         style: const TextStyle(fontSize: 12.5),
                       ),
                       behavior: SnackBarBehavior.floating,
-                      duration: const Duration(seconds: 6),
+                      duration: const Duration(seconds: 4),
+                      persist: false,
                       action: SnackBarAction(
                         label: '되돌리기',
                         onPressed: () {

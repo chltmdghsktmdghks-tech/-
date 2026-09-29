@@ -328,7 +328,8 @@ class _SongsViewState extends State<SongsView> {
                     SnackBar(
                       content: Text('「${gone.meta.name}」 을 지웠습니다'),
                       behavior: SnackBarBehavior.floating,
-                      duration: const Duration(seconds: 6),
+                      duration: const Duration(seconds: 2),
+                      persist: false,
                       action: SnackBarAction(
                         label: '되돌리기',
                         onPressed: () async {

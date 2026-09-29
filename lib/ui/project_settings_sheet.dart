@@ -94,6 +94,7 @@ class _ProjectSettingsBody extends StatelessWidget {
           style: const TextStyle(fontSize: 12.5),
         ),
         duration: const Duration(milliseconds: 3000),
+        persist: false,
         behavior: SnackBarBehavior.floating,
         action: SnackBarAction(
           label: '되돌리기',
@@ -298,7 +299,7 @@ class _BpmEditorState extends State<_BpmEditor> {
     }
     return Row(
       children: [
-        _StepButton(
+        StepButton(
           icon: Icons.remove,
           onTap: () => _set(widget.transport.bpm - 1),
         ),
@@ -328,7 +329,7 @@ class _BpmEditorState extends State<_BpmEditor> {
         const SizedBox(width: 8),
         const Text('BPM', style: TextStyle(fontSize: 12, color: Colors.white38)),
         const SizedBox(width: 10),
-        _StepButton(
+        StepButton(
           icon: Icons.add,
           onTap: () => _set(widget.transport.bpm + 1),
         ),
@@ -337,24 +338,64 @@ class _BpmEditorState extends State<_BpmEditor> {
   }
 }
 
-class _StepButton extends StatelessWidget {
+/// -/+ 한 칸짜리 버튼 — 빠르기·조 같은 값을 슬라이더 없이 밀 때 쓴다.
+/// (2026-09-29: 두들플레이 시작 화면 `doodle_setup_sheet.dart`도 같이 쓴다.)
+///
+/// **36×36이었다 — 44dp 최소 터치 타깃에 못 미쳤다**(디자인 감사, 2026-09-29).
+/// 두들플레이 시작 시트(BPM·조 조절)는 손끝으로 여러 번 연타하는 자리라
+/// 작은 버튼일수록 헛짚기가 잦다. 보이는 네모(칠해진 회색 배경)는 36으로
+/// 그대로 두고, 실제로 닿는 자리만 `SizedBox`+`Center`로 44×44까지 넓힌다
+/// (`home_view.dart`의 카드 지우기 ✕ 버튼과 같은 방식).
+class StepButton extends StatelessWidget {
   final IconData icon;
-  final VoidCallback onTap;
-  const _StepButton({required this.icon, required this.onTap});
+  final VoidCallback? onTap;
+
+  /// 주면 아이콘 대신 이 글자(예: `-10`)를 그린다 — 큰 걸음 버튼용.
+  /// 터치 면적(44×44)은 그대로다.
+  final String? label;
+  const StepButton({
+    super.key,
+    required this.icon,
+    required this.onTap,
+    this.label,
+  });
 
   @override
   Widget build(BuildContext context) => InkWell(
     onTap: onTap,
-    borderRadius: BorderRadius.circular(8),
-    child: Container(
-      width: 36,
-      height: 36,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.white10,
-        borderRadius: BorderRadius.circular(8),
+    borderRadius: BorderRadius.circular(22),
+    child: SizedBox(
+      width: 44,
+      height: 44,
+      child: Center(
+        child: Container(
+          width: 36,
+          height: 36,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            color: Colors.white10,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: label != null
+              ? Text(
+                  label!,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    color: onTap == null
+                        ? Colors.white24
+                        : Colors.tealAccent.shade400,
+                  ),
+                )
+              : Icon(
+                  icon,
+                  size: 18,
+                  color: onTap == null
+                      ? Colors.white24
+                      : Colors.tealAccent.shade400,
+                ),
+        ),
       ),
-      child: Icon(icon, size: 18, color: Colors.tealAccent.shade400),
     ),
   );
 }

@@ -1518,6 +1518,36 @@ class Project extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// **두들 전용 얕은 장르 입히기** — 사용자 지시 2026-09-29 (12): "두들은 친 트랙만,
+  /// 한 씬만". [setGenre] 는 송폼·씬·(객체형이면) 편성까지 깔아 버려서 두들이 시작하자마자
+  /// 남의 악기·다른 씬이 채워진다. 여기서는 **빈 프로젝트(씬 1개·전부 쉼)를 그대로 두고**
+  /// 장르가 정하는 것 중 소리 몫만 얹는다: 장르 이름(코드 진행·스윙 판단용)·박자·
+  /// 트랙 음색·드럼킷·씬 빠르기·믹스/이펙트. 씬·구간·패턴은 만들지 않는다.
+  void setGenreBare(String key) {
+    if (kObjectSongForms[key] == null && kSongForms[key] == null) return;
+    final g = songGenreOf(key);
+    genre = key;
+    meter = genreDef(key).meter;
+    final wantVoice = kGenreTypeVoice[g.$1];
+    for (final t in tracks) {
+      if (t.type == 'drum') continue;
+      final v = wantVoice?[t.type] ?? kTypeVoice[t.type];
+      if (v != null && v != t.voice && _voiceIsAuto(t)) t.voice = v;
+    }
+    for (final s in scenes) {
+      s.bpm = g.$3;
+      s.kit = g.$4;
+    }
+    final bySlot = <String, List<Track>>{};
+    for (final t in tracks) {
+      (bySlot[t.type] ??= []).add(t);
+    }
+    _seedMix(g.$1, bySlot);
+    _seedFx(g.$1, bySlot);
+    _loadScene(currentScene);
+    notifyListeners();
+  }
+
   /// 지금 스타일의 대표 패턴 — [addTrack] 이 4/4 가 아닐 때 이걸 쓴다
   /// (그 스타일이 고른 것이니 반드시 지금 박자와 맞는다).
   String? _genreDefaultPattern(String type) {
@@ -2167,6 +2197,17 @@ class Project extends ChangeNotifier {
     setGenre('lofi');
   }
 
+  /// [reset] 의 빈 캔버스판 — 장르 없이 씬 1개(전부 쉼)·구간 1개로 되돌린다.
+  /// `Project.blank()` 와 같은 모양을 그 저장·열기 길(`loadJson`)로 만든다.
+  void resetBlank({String? newName}) {
+    loadJson(Project.blank().toJson());
+    name = newName ?? '새 곡';
+    userNote.clear();
+    userNoteType.clear();
+    _loadScene(0);
+    notifyListeners();
+  }
+
   Scene get scene => scenes[currentScene.clamp(0, scenes.length - 1)];
 
   /// 씬의 클립을 트랙에 싣는다(소리는 안 건드린다 — 부른 쪽이 루프를 새로 보낸다).
@@ -2187,6 +2228,40 @@ class Project extends ChangeNotifier {
 
   /// 지금 씬의 클립을 바꾼다. **트랙과 씬 양쪽에 쓴다** — 한쪽만 쓰면
   /// 씬을 갔다 오는 순간 방금 고른 게 사라진다.
+  /// 화면이 씬을 **잠깐 빌려 쓰는 중**(두들플레이)이면 참 — 이 동안 자동 저장은
+  /// 파일을 쓰지 않는다(임시 상태가 영구 저장되는 것을 막는다).
+  bool transientEdit = false;
+
+  bool _quiet = false;
+
+  @override
+  void notifyListeners() {
+    if (_quiet) return;
+    super.notifyListeners();
+  }
+
+  /// [f] 안의 변경은 알리지 않는다 — 위젯이 **만들어지는 중**(`initState`)에 알리면
+  /// 이미 그려지는 다른 화면이 `setState() called during build` 로 터진다.
+  /// 끝난 뒤 한 번 알리는 건 부른 쪽 몫(`poke`).
+  void quietly(void Function() f) {
+    final was = _quiet;
+    _quiet = true;
+    try {
+      f();
+    } finally {
+      _quiet = was;
+    }
+  }
+
+  /// 조용히 바꾼 것을 지금 알린다.
+  void poke() => notifyListeners();
+
+  /// 빌려 쓰기를 끝낸다 — 되돌린 상태가 저장되도록 알린다.
+  void endTransientEdit() {
+    transientEdit = false;
+    notifyListeners();
+  }
+
   void setClip(Track t, String? pattern) {
     scene.clips[t.id] = pattern;
     t.pattern = pattern;

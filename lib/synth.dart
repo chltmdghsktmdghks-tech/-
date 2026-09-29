@@ -89,6 +89,20 @@ const int kPartMelody = 2;
 /// 내리면 **내가 치는 소리까지 같이 작아진다**. 웹도 라이브 채널을 따로 뒀다.
 const int kPartLive = -2;
 
+/// **메트로놈 전용 버스 표시** — 라이브 버스로 나가되(트랙 볼륨과 분리) 두 가지가 다르다.
+/// ① 반주를 뚫도록 [kMetroGain] 만큼 키운다 ② 이 음이 **실제로 켜지는 그 프레임**에
+/// 반주(슬롯·드럼)를 살짝 눌렀다 놓는다(`Engine._metDuck`). 예약(delay)으로 미리 보내는
+/// 소리라, 덕킹을 보내는 쪽에서 따로 예약하면 시각이 어긋난다 — 엔진이 이 표시를 보고
+/// 재생 시점에 직접 건다.
+const int kPartMetro = -3;
+
+/// 메트로놈 클릭 레벨 배율(라이브 버스에 들어가기 전). 값의 근거는 HANDOFF 2026-09-29 (10).
+const double kMetroGain = 3.0;
+
+/// 덕킹: 눌리는 정도 −2.5dB, 유지 시간 50ms(복귀는 엔진에서 12ms).
+const double kMetroDuckGain = 0.75; // 10^(-2.5/20)
+const double kMetroDuckHoldSec = 0.05;
+
 class SynthNote {
   bool active = false;
   int part = kPartMelody;
@@ -214,6 +228,9 @@ class SynthNote {
     // 유니즌 폭(cent) 손잡이(사용자 요청, 2026-09-17) — null 이면 악기
     // 기본값(`Inst.uni`) 그대로.
     double? uniOverride,
+    // 808 꼬리(2026-09-29) — 0 이면 아무 일도 안 한다(예전과 비트 단위로 같다).
+    // 양수면 이 음의 릴리스를 그 초만큼 **늘린다**(기본 릴리스보다 짧게는 안 줄인다).
+    double tailSec = 0,
   }) {
     reset();
     active = true;
@@ -227,6 +244,14 @@ class SynthNote {
     final bank = kSampleBanks[voice];
     if (bank != null) {
       _startSample(bank, freq, dur, vel, soft, kSamplePan[voice] ?? 0.0, voice);
+      if (tailSec > 0) {
+        // 표본은 자기 감쇄가 끝이라 새로 늘릴 수는 없다 — 끄는 시점을 뒤로 밀고
+        // 끌 때 페이드를 [tailSec] 로 길게 잡아 「덜컥 끊김」만 없앤다.
+        final t = (tailSec.clamp(0.0, 6.0) * kSampleRate).round();
+        _smRelStart += t;
+        if (t > _smRelLen) _smRelLen = t;
+        if (t > _smRelHold) _smRelHold = t;
+      }
       return;
     }
     // 표본팩 악기인데 아직 안 읽었으면 지금 트리거한다(끝날 때까지 이번
@@ -249,6 +274,8 @@ class SynthNote {
     // 릴리스는 사용자가 만졌으면 그 값이 악기 기본값을 이긴다.
     double rel = relOverride ?? I.rel;
     double hold = I.holdFor(dur);
+    final tail = tailSec.clamp(0.0, 6.0).toDouble() * kTailReleaseScale;
+    if (tail > rel) rel = tail;
 
     // ── 어택 (5단계 48/N) ──
     // 악기마다 '소리가 서는' 시간이 다르고, **세게 칠수록 빨라진다.**
@@ -278,6 +305,10 @@ class SynthNote {
       );
       // 댐퍼도 같이 — 굵은 저음현은 펠트를 대도 천천히 멎는다
       rel = rg[0] * (0.6 + 0.4 * kmul);
+      if (tail > 0) {
+        rel = math.max(rel, tail);
+        ringLen += tail * 0.5; // 치는 악기: 울림 자체도 꼬리만큼 더 간다
+      }
     } else {
       // 어택이 길어진 만큼 유지 구간을 줄인다 — **음 전체 길이는 그대로여야 한다.**
       // (안 그러면 스트링을 90ms 어택으로 바꾼 순간 곡 전체가 밀린다)
@@ -730,7 +761,10 @@ class SynthNote {
   ///
   /// 엔벨로프를 릴리스 구간으로 옮기고 수명을 그만큼으로 줄인다. 수명을 안 줄이면
   /// 소리는 멎었는데 목소리는 계속 물고 있어서, 빨리 여러 번 치면 목소리가 바닥난다.
-  void release() {
+  ///
+  /// [tailSec] > 0 이면 릴리스 길이를 그 초로 **바꿔서** 놓는다 — 손을 뗀 순간
+  /// 부르는 쪽이 「꼬리를 이만큼」을 정한다(808 홀드, 2026-09-29).
+  void release({double tailSec = 0}) {
     if (!active) return;
     // ── 표본 경로는 **따로 재워야 한다** (2026-09-22) ──
     //
@@ -744,11 +778,14 @@ class SynthNote {
     // `math.min` 이어야 한다 — 그냥 대입하면 이미 잦아들던 음에 release 가
     // 한 번 더 왔을 때 페이드가 처음으로 되감긴다.
     if (_sampleMode) {
-      _smRelLen = _smRelHold < 1 ? 1 : _smRelHold;
+      final t = (tailSec.clamp(0.0, 6.0) * kSampleRate).round();
+      _smRelLen = math.max(_smRelHold < 1 ? 1 : _smRelHold, t);
       if (_age < _smRelStart) _smRelStart = _age;
       return;
     }
-    _env.release();
+    _env.release(
+      sec: tailSec > 0 ? tailSec.clamp(0.0, 6.0).toDouble() * kTailReleaseScale : null,
+    );
     final left = _env.releaseSamples + (0.05 * kSampleRate).round();
     if (left < _life) _life = left;
   }

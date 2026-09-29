@@ -265,6 +265,10 @@ enum _Kind { lowpass, highpass, bandpass, peaking, lowShelf, highShelf }
 //   v(t) = v0 * (v1/v0)^(경과/구간길이)  → 샘플당 고정 배율로 곱해 나가면 된다.
 const double kSilent = 0.0001;
 
+/// 「꼬리 N초」 = **귀에 들리는** 꼬리(약 −40dB 까지). 릴리스 엔벨로프는 −80dB 까지 내려가는 시간이라
+/// 그대로 N초를 주면 절반쯤에서 이미 안 들린다 — 그래서 2배로 잡는다(808 꼬리, 2026-09-29).
+const double kTailReleaseScale = 2.0;
+
 class Env {
   final List<int> _n = [];
   final List<double> _to = [];
@@ -335,9 +339,16 @@ class Env {
   /// (`_next` 가 현재 `value` 에서 기울기를 다시 잡는다 — 뚝 끊기지 않는다).
   ///
   /// 이미 릴리스에 들어섰거나 끝났으면 아무 일도 안 한다 — 두 번 떼도 안전하다.
-  void release() {
+  ///
+  /// [sec] 를 주면 마지막 릴리스 구간 길이를 그만큼으로 **바꿔서** 들어간다 —
+  /// 808 서브처럼 「손 뗀 뒤 꼬리」를 부르는 쪽이 정할 때 쓴다(2026-09-29).
+  void release({double? sec}) {
     if (done || _n.length < 2) return;
     if (_seg >= _n.length - 1) return;
+    if (sec != null) {
+      final s = (sec * kSampleRate).round();
+      _n[_n.length - 1] = s < 1 ? 1 : s;
+    }
     _seg = _n.length - 2; // `_next` 가 하나 올리므로 한 칸 앞에 둔다
     _next();
   }

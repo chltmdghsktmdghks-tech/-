@@ -31,6 +31,7 @@ import '../instruments.dart';
 import '../project.dart';
 import '../sequencer.dart';
 import 'fx_rack.dart';
+import 'design.dart';
 
 const _kLiveColor = Color(0xFF4DD0A8);
 const _kMasterColor = Color(0xFFFFC107);
@@ -139,7 +140,8 @@ class _MixerViewState extends State<MixerView> {
                   : '「$name」 트랙을 지웠습니다',
             ),
             behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 6),
+            duration: const Duration(seconds: 4),
+            persist: false,
             action: SnackBarAction(
               label: '되돌리기',
               onPressed: () {
@@ -1424,10 +1426,10 @@ class _ToneChip extends StatelessWidget {
 // ══════════════════ 공용 ══════════════════
 
 const _typeColor = {
-  'drum': Color(0xFF7CB342),
-  'bass': Color(0xFF42A5F5),
-  'chord': Color(0xFFAB47BC),
-  'melody': Color(0xFFFFA726),
+  'drum': DS.trackDrum,
+  'bass': DS.trackBass,
+  'chord': DS.trackChord,
+  'melody': DS.trackMelody,
 };
 
 /// 음색 이름 — 드럼 트랙은 음색표가 아니라 **키트**를 쓴다.

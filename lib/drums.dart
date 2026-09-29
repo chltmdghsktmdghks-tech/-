@@ -240,6 +240,9 @@ const Map<String, String> DRUM_LABEL = {
 ///
 /// 한쪽으로 통일하지 않는 이유: 데이터 쪽 이름은 **사용자가 편집기에서 만든 패턴에
 /// 저장돼 있다.** 바꾸면 그 패턴들이 이름을 잃는다. 그래서 둘 다 받는다.
+/// 오픈 하이햇 전용 이름(`hatopen`)의 릴리스 배수 — 닫힌 하이햇 대비. 기본 열림(세기 3)은 3.2배.
+const double kOpenHatRelMul = 6.5;
+
 const Map<String, String> kDrumAlias = {'shaker': 'shake', 'cowbell': 'cow'};
 
 /// 데이터 쪽 이름을 소리 쪽 이름으로. 모르는 이름은 그대로 둔다.
@@ -333,6 +336,12 @@ class DrumVoice {
   /// 지금 울리는 타악기 이름 — 초킹(하이햇 끊기)에 쓴다.
   String inst = '';
 
+  /// 열린 하이햇인가 — 킥이 치면 이것도 촥 닫힌다(엔진이 본다).
+  bool openHat = false;
+
+  /// 808 「붐」 서브가 들어 있는 톤 번호(-1 = 없음). 홀드 킥이 손 뗄 때 이 톤만 놓는다.
+  int _boomTone = -1;
+
   final _Hit _hit = _Hit();
   bool _varyOn = false;
 
@@ -401,6 +410,16 @@ class DrumVoice {
     _chokeLeft = n;
   }
 
+  /// 홀드 중이던 808 킥을 **손 뗀 순간** 놓는다 — 서브가 [tailSec] 동안 사그라든다.
+  /// 붐이 없는 타격이면 아무 일도 안 한다.
+  void releaseBoom(double tailSec) {
+    if (!active || _boomTone < 0 || _boomTone >= _nt) return;
+    final sec = tailSec.clamp(0.05, 4.0).toDouble() * kTailReleaseScale;
+    _tones[_boomTone].amp.release(sec: sec);
+    final n = ((sec + 0.05) * kSampleRate).round();
+    if (n < _life) _life = n;
+  }
+
   void reset() {
     active = false;
     _sampleMode = false;
@@ -408,6 +427,8 @@ class DrumVoice {
     _age = 0;
     _chokeN = 0;
     _chokeLeft = 0;
+    _boomTone = -1;
+    openHat = false;
     _varyOn = false;
     _panL = 1;
     _panR = 1;
@@ -587,7 +608,10 @@ class DrumVoice {
 
   // ── 타격 ──
 
-  void kick(DrumKit kit, int vel) {
+  /// [tailSec] > 0 이면 **808 붐** — 킥 밑에 서브 사인을 깔아 그 초만큼 길게 운다.
+  /// [hold] 이면 서브가 **손을 뗄 때까지** 유지된다([releaseBoom] 으로 놓는다).
+  /// 둘 다 아니면 예전 킥과 한 비트도 다르지 않다.
+  void kick(DrumKit kit, int vel, {double tailSec = 0, bool hold = false}) {
     reset();
     final k = kit.kick;
     final v = VG[vel] ?? 1.0;
@@ -612,7 +636,25 @@ class DrumVoice {
       r: k.rel * _hit.rel,
       peak: 1.0 * v * _hit.amp,
     );
-    if (k.sub > 0) {
+    if (tailSec > 0 || hold) {
+      // 서브 톤: 폰 스피커가 못 내는 30Hz 이하로 내려가지 않게 40Hz 바닥 + 살짝 포화(배음이
+      // 있어야 작은 스피커에서도 「우웅」이 들린다). 처음 0.5초쯤 서서히 가라앉았다가
+      // (sus) 홀드면 유지, 아니면 tailSec 동안 릴리스로 사그라든다.
+      final tail = tailSec.clamp(0.0, 4.0).toDouble();
+      final subF = math.max(k.end * 1.05, 40.0) * _hit.pitch;
+      final holdSec = hold ? 6.0 : math.max(0.05, tail * 0.35);
+      final relSec = (hold ? math.max(0.25, tail > 0 ? tail : 0.7) : math.max(0.1, tail * 0.65)) * kTailReleaseScale;
+      _addTone(
+        wave: satWave(0.45),
+        startFreq: subF,
+        a: 0.004,
+        h: holdSec,
+        r: relSec,
+        peak: math.max(k.sub, 0.55) * v * _hit.amp,
+        sus: 0.55,
+      );
+      _boomTone = _nt - 1;
+    } else if (k.sub > 0) {
       _addTone(
         wave: wSine,
         startFreq: k.end * 1.05 * _hit.pitch,
@@ -684,7 +726,7 @@ class DrumVoice {
     active = true;
   }
 
-  void hat(DrumKit kit, int vel, {bool highQuality = true}) {
+  void hat(DrumKit kit, int vel, {bool highQuality = true, bool longOpen = false}) {
     reset();
     final k = kit.hat;
     final v = VG[vel] ?? 1.0;
@@ -694,8 +736,10 @@ class DrumVoice {
     final vr = vel / 3.0;
     // 세기 3 = **열린 하이햇.** 두 접시가 안 붙어 있으니 훨씬 오래 흔들린다
     // (1.8배로는 '조금 긴 닫힌 하이햇'이지 열린 소리가 아니다).
-    final open = vel >= 3;
-    final rel = k.rel * (open ? 3.2 : (vel == 2 ? 1.15 : 1.0)) * _hit.rel;
+    final open = vel >= 3 || longOpen;
+    openHat = open;
+    // longOpen(오픈 하이햇 전용 이름 `hatopen`) 은 「지잉」 하고 훨씬 오래 운다.
+    final rel = k.rel * (longOpen ? kOpenHatRelMul : (open ? 3.2 : (vel == 2 ? 1.15 : 1.0))) * _hit.rel;
     // 세게 치면 밝다 — 심벌이 더 크게 휘면서 높은 배음이 살아난다
     final hi = k.hi * (0.88 + 0.18 * vr) * _hit.tone;
     // 살짝 스치면 심벌의 높은 모드가 아예 안 깨어난다 — 그래서 어둡다.
@@ -1042,28 +1086,35 @@ class DrumVoice {
     int vel, {
     double tomFreq = 180,
     bool highQuality = true,
+    double tailSec = 0,
+    bool holdBoom = false,
+    bool longOpen = false,
   }) {
     // 데이터 쪽 이름('shaker'·'cowbell')으로 와도 받는다 — [kDrumAlias] 참고.
     final inst = drumName(rawInst);
     this.inst = inst;
+    final boom = inst == 'kick' && (tailSec > 0 || holdBoom);
+    // 808 붐은 표본을 못 늘이므로 합성 킥으로 낸다(어쿠스틱 킷이어도).
+    if (longOpen && inst == 'hat') vel = 3; // 표본 킷에서도 열린 조각을 고른다
     // **표본이 있으면 합성을 아예 안 탄다** — `drum_sampler.dart`. 이 킷이
     // 표본을 안 켰거나(전자음 킷), 이 조각이 표본이 없거나, 아직 로드가
     // 안 끝났으면 그대로 아래 합성 경로로 간다(끊김 없음 — `sampler.dart`
     // 문서와 같은 이유).
-    if (kit.sampled && _startDrumSample(inst, vel, tomFreq)) {
+    if (!boom && kit.sampled && _startDrumSample(inst, vel, tomFreq)) {
+      openHat = inst == 'hat' && vel >= 3;
       final base = _panOf[inst] ?? 0.0;
       _setPan(base);
       return;
     }
     switch (inst) {
       case 'kick':
-        kick(kit, vel);
+        kick(kit, vel, tailSec: tailSec, hold: holdBoom);
         break;
       case 'snare':
         snare(kit, vel);
         break;
       case 'hat':
-        hat(kit, vel, highQuality: highQuality);
+        hat(kit, vel, highQuality: highQuality, longOpen: longOpen);
         break;
       case 'tom':
         tom(kit, vel, freq: tomFreq);

@@ -167,6 +167,11 @@ const int _cHoldOn = 21; // 꾹 눌러 소리 유지 — 손가락 번호로 잡
 const int _cHoldOff = 22; // 그 손가락을 놓는다 (번호 −1 = 전부) // 돌아왔다 — 장치를 다시 연다
 const int _cAdsr = 23; // 그 버스의 ADSR 손잡이(신스 악기만) 갈아 끼우기
 const int _cUni = 24; // 그 버스의 유니즌 폭(신스 악기만) 갈아 끼우기
+const int _cDrumHold = 25; // 808 킥을 누르고 있는 동안 서브 유지 (손가락 번호로 잡는다)
+const int _cDrumRelease = 26; // 그 킥을 놓는다 — 꼬리가 진다
+const int _cSwell = 27; // 버스 스웰 진행도를 민다
+const int _cSwellRamp = 28; // 버스 스웰을 시간에 걸쳐 올린다
+const int _cSwellClear = 29; // 스웰 전부 걷기
 
 /// 메인(UI) 쪽에서 쓰는 손잡이
 class AudioClient {
@@ -259,8 +264,9 @@ class AudioClient {
     bool soft = false,
     double glideF = 0,
     int part = kPartLive,
+    double tailSec = 0,
   }) {
-    _tx.send([_cNote, voice, freq, dur, vel, soft, glideF, 0.0, part]);
+    _tx.send([_cNote, voice, freq, dur, vel, soft, glideF, 0.0, part, tailSec]);
   }
 
   /// 5단계 — 믹서의 마스터 페이더(0~1.6). 엔진의 고정 헤드룸에 곱해진다.
@@ -292,7 +298,28 @@ class AudioClient {
   }) => _tx.send([_cHoldOn, id, voice, freq, vel, soft, glideF, part]);
 
   /// 그 손가락을 놓는다. `id: -1` 이면 잡고 있는 것 **전부**.
-  void holdOff(int id) => _tx.send([_cHoldOff, id]);
+  /// [tailSec] > 0 이면 **꼬리를 그 초로** 놓는다 — 808 서브: 누른 시간(`boomTailFor(holdSec)`)을
+  /// 넘기면 짧게 = 툭, 길게 = 길게 운다. 0(기본)이면 악기 원래 릴리스.
+  void holdOff(int id, {double tailSec = 0}) => _tx.send([_cHoldOff, id, tailSec]);
+
+  /// **808 킥 홀드** — 누르는 동안 서브가 유지되고, [drumHoldOff] 로 놓으면 꼬리가 진다.
+  /// [id] 는 손가락(포인터) 번호. 표본 킷이어도 이 킥은 합성(서브 포함)으로 난다.
+  void drumHoldOn(int id, String kit, int vel) => _tx.send([_cDrumHold, id, kit, vel]);
+
+  /// 홀드 킥을 놓는다. [tailSec] 동안 서브가 사그라든다(`boomTailFor(holdSec)` 권장).
+  void drumHoldOff(int id, {double tailSec = 0.7}) => _tx.send([_cDrumRelease, id, tailSec]);
+
+  /// **스웰** — [bus]('chord'·'bass'·'melody' …)의 볼륨을 [level](0~1)로 민다. 라이브 제스처가
+  /// 매 프레임 불러도 된다(엔진이 30ms 로 부드럽게 따라감). 크기 = level². 1 = 원래 소리.
+  void setSwell(String bus, double level, {double smoothSec = 0.03}) =>
+      _tx.send([_cSwell, bus, level, smoothSec]);
+
+  /// 스웰을 [sec] 초에 걸쳐 [from]→1 로 자동으로 올린다(진행도를 실시간으로 못 줄 때).
+  void startSwell(String bus, double sec, {double from = 0}) =>
+      _tx.send([_cSwellRamp, bus, sec, from]);
+
+  /// 스웰 전부 걷기(전부 원래 소리).
+  void clearSwell() => _tx.send([_cSwellClear]);
 
   void setInserts(String bus, List<Map<String, dynamic>> slots) =>
       _tx.send([_cInserts, bus, slots]);
@@ -339,7 +366,8 @@ class AudioClient {
     double loopSec, {
     bool restart = true,
     double unitSec = 0,
-  }) => _tx.send([_cLoop, notes, drums, loopSec, restart, unitSec]);
+    double startDelaySec = 0,
+  }) => _tx.send([_cLoop, notes, drums, loopSec, restart, unitSec, startDelaySec]);
 
   /// 여러 음을 한 번에 예약한다. 한 개씩 보내면 아이솔레이트 사이 왕복이 그만큼 늘어난다.
   /// 각 항목: [voice, freq, dur, vel, soft, glide, delaySec, part?]
@@ -352,11 +380,19 @@ class AudioClient {
     _tx.send([_cBatch, notes]);
   }
 
-  void drumOn(String kit, String inst, int vel, {double tomFreq = 180}) {
-    _tx.send([_cDrum, kit, inst, vel, tomFreq]);
+  /// [inst] 에 `'hatopen'` 을 주면 열린 하이햇(길게 지잉) — 다음 킥·하이햇 때 자동으로 닫힌다.
+  /// [tailSec] > 0 이고 inst 가 kick 이면 808 붐(그 초만큼 서브 꼬리). 짧게 누른 킥은 0.
+  void drumOn(
+    String kit,
+    String inst,
+    int vel, {
+    double tomFreq = 180,
+    double tailSec = 0,
+  }) {
+    _tx.send([_cDrum, kit, inst, vel, tomFreq, tailSec]);
   }
 
-  /// 여러 타격을 한 번에 예약한다. 각 항목: [kit, inst, vel, tomFreq, delaySec]
+  /// 여러 타격을 한 번에 예약한다. 각 항목: [kit, inst, vel, tomFreq, delaySec, tailSec?]
   void drumBatch(List<List<dynamic>> hits) {
     _tx.send([_cDrumBatch, hits]);
   }
@@ -371,8 +407,21 @@ class AudioClient {
   /// [relSec] 는 킥이 지나간 뒤 되돌아오는 시간(초) — 생략하면 지금 값을
   /// 그대로 둔다(장르 바뀔 때 세기만 갈고 복귀 시간은 사용자가 맞춘 대로
   /// 두려고, `sequencer.dart`).
-  void setDuck(double amount, {double? relSec}) =>
-      _tx.send([_cDuck, amount, relSec]);
+  ///
+  /// [buses] 를 주면 **그 버스만** 킥에 눌린다(예: `kPumpBuses` = 코드·베이스). null(기본)이면
+  /// 예전처럼 드럼 뺀 전부. 값을 다시 보낼 때마다 이 대상도 새로 정해진다(생략 = 전부).
+  void setDuck(double amount, {double? relSec, List<String>? buses}) =>
+      _tx.send([_cDuck, amount, relSec, buses]);
+
+  /// **사이드체인 펌핑(장르 자동)** — 하우스/EDM 계열(`kPumpGenres`)이면 코드·베이스를 킥에 맞춰
+  /// 펌핑(깊이 = 장르 표 `kGenreDuck`, 복귀 `kPumpRelSec`), 그 밖에는 [offDepth](기본 0 = 끔)로.
+  /// 무장르(null)도 끔. 반환값 = 실제로 건 깊이.
+  double setSidechainPump(String? genre, {double offDepth = 0}) {
+    final on = genre != null && kPumpGenres.contains(genre);
+    final depth = on ? (kGenreDuck[genre] ?? 0.4) : offDepth;
+    setDuck(depth, relSec: on ? kPumpRelSec : null, buses: on ? kPumpBuses : null);
+    return depth;
+  }
 
   /// 5단계 — 믹서 화면이 트랙 버스 하나를 직접 조절한다.
   /// [name] 이 'drum' 이면 드럼 버스, 아니면 그 이름의 멀로딕 버스.
@@ -466,6 +515,7 @@ class LoopState {
     bool restart,
     Engine engine, {
     double unitSec = 0,
+    double startDelaySec = 0,
   }) {
     final wasOff = !on;
     notes = n;
@@ -480,8 +530,12 @@ class LoopState {
     }
     if (wasOff || restart) {
       engine.clearSchedule();
-      nextAt = engine.nowFrames;
-      startAt = engine.nowFrames;
+      // [startDelaySec] > 0 이면 **판 머리를 그만큼 뒤로 미룬다**(두들플레이의 미리 세기
+      // 한 마디 — 그 한 마디가 판의 마지막 마디 자리에 놓여 녹음이 판 머리에서 시작한다).
+      // 그동안 `posOf` 는 판 끝쪽(뒤로 되접힌 자리)을 가리킨다. 기본 0 은 예전과 같다.
+      final d = startDelaySec > 0 ? (startDelaySec * kSampleRate).round() : 0;
+      nextAt = engine.nowFrames + d;
+      startAt = nextAt;
       count = 0;
     }
   }
@@ -562,6 +616,16 @@ const int _kSyncEveryMs = 1500;
 /// AudioTrack 이 자기 안에 들고 있는 양(프레임). 플러그인의 잔량 조회에는 안 잡힌다.
 /// A17 실측 1024. 다른 폰에서 다르면 드리프트 보정이 알아서 흡수한다.
 const int kDeviceBuffer = 1024;
+
+/// 아무 소리도 안 나는(루프·예약·발음 중인 음이 없는) 동안 유지하는 버퍼 상한(프레임).
+///
+/// 재생 버튼→첫 소리 지연 = 그 순간 큐에 쌓여 있는 양(`buffered`)이다. 첫 음은 렌더
+/// 머리(`nowFrames`)에 예약되고, 그 자리는 귀에서 `buffered` 만큼 뒤다. 곡 모드
+/// (`kAheadSong` 6144 = 128ms)로 한 번 들어가면 멈춘 뒤에도 무음 128ms 를 계속 쌓아
+/// 두므로 다음 Play 가 그만큼 늦게 울렸다. 소리가 나기 시작하면(busy) 원래 목표
+/// (6144)까지 바로 키우므로 재생 중 안정성은 그대로다 — 3072 는 두들 화면이 루프를
+/// 틀어 놓고 내내 견디는 바닥값이다.
+const int kIdleAhead = 3072;
 
 void _audioMain(List<dynamic> args) async {
   final SendPort tx = args[0] as SendPort;
@@ -750,8 +814,13 @@ void _audioMain(List<dynamic> args) async {
       buffered = 0;
     }
 
-    // 모자란 만큼 채운다
-    var need = ahead - buffered;
+    // 모자란 만큼 채운다 — 조용한 동안은 목표를 kIdleAhead 로 눌러 둔다.
+    final busy = loop.on ||
+        engine.pendingCount > 0 ||
+        engine.activeCount > 0 ||
+        engine.drumActiveCount > 0;
+    final target = (busy || ahead <= kIdleAhead) ? ahead : kIdleAhead;
+    var need = target - buffered;
     if (need >= _kMinTopUp) {
       // 한 번에 너무 많이 만들면 그 렌더가 길어져서 **그것 자체가 지체가 된다**
       // (곡 재생 진입에서 목표가 3072→6144 로 뛸 때가 정확히 그 상황이다).
@@ -884,6 +953,7 @@ int handleAudioMessage(
           soft: m[5] as bool,
           glideF: m[6] as double,
           part: m[8] as int,
+          tailSec: m.length > 9 ? (m[9] as num).toDouble() : 0,
         );
         break;
       case _cHoldOn:
@@ -901,13 +971,38 @@ int handleAudioMessage(
         if (id < 0) {
           engine.releaseAllHeld();
         } else {
-          engine.noteRelease(id);
+          engine.noteRelease(
+            id,
+            tailSec: m.length > 2 ? (m[2] as num).toDouble() : 0,
+          );
         }
+      case _cDrumHold:
+        engine.drumHold(m[1] as int, m[2] as String, m[3] as int);
+      case _cDrumRelease:
+        engine.drumRelease(
+          m[1] as int,
+          tailSec: m.length > 2 ? (m[2] as num).toDouble() : 0.7,
+        );
+      case _cSwell:
+        engine.setSwell(
+          m[1] as String,
+          (m[2] as num).toDouble(),
+          smoothSec: m.length > 3 ? (m[3] as num).toDouble() : 0.03,
+        );
+      case _cSwellRamp:
+        engine.startSwell(
+          m[1] as String,
+          (m[2] as num).toDouble(),
+          from: m.length > 3 ? (m[3] as num).toDouble() : 0,
+        );
+      case _cSwellClear:
+        engine.clearSwell();
       case _cBatch:
         for (final n in (m[1] as List)) {
           final e = n as List;
           final delay = e[6] as double;
           final part = e.length > 7 ? e[7] as int : kPartMelody;
+          final tail = e.length > 8 ? (e[8] as num).toDouble() : 0.0;
           if (delay <= 0) {
             engine.noteOn(
               e[0] as String,
@@ -917,6 +1012,7 @@ int handleAudioMessage(
               soft: e[4] as bool,
               glideF: e[5] as double,
               part: part,
+              tailSec: tail,
             );
           } else {
             engine.schedule(
@@ -928,6 +1024,7 @@ int handleAudioMessage(
               soft: e[4] as bool,
               glideF: e[5] as double,
               part: part,
+              tailSec: tail,
             );
           }
         }
@@ -946,6 +1043,7 @@ int handleAudioMessage(
           m[4] as bool,
           engine,
           unitSec: m.length > 5 ? (m[5] as num).toDouble() : 0,
+          startDelaySec: m.length > 6 ? (m[6] as num).toDouble() : 0,
         );
         break;
       case _cAhead:
@@ -960,6 +1058,10 @@ int handleAudioMessage(
         if (m.length > 2 && m[2] != null) {
           engine.duckRelSec = (m[2] as num).toDouble();
         }
+        // 대상 버스 — 메시지에 없거나 null 이면 예전처럼 전부
+        engine.setDuckBuses(
+          m.length > 3 && m[3] != null ? List<String>.from(m[3] as List) : null,
+        );
         break;
       case _cQuality:
         engine.highQuality = m[1] as bool;
@@ -970,18 +1072,21 @@ int handleAudioMessage(
           m[2] as String,
           m[3] as int,
           tomFreq: m[4] as double,
+          tailSec: m.length > 5 ? (m[5] as num).toDouble() : 0,
         );
         break;
       case _cDrumBatch:
         for (final h in (m[1] as List)) {
           final e = h as List;
           final delay = e[4] as double;
+          final tail = e.length > 5 ? (e[5] as num).toDouble() : 0.0;
           if (delay <= 0) {
             engine.drumOn(
               e[0] as String,
               e[1] as String,
               e[2] as int,
               tomFreq: e[3] as double,
+              tailSec: tail,
             );
           } else {
             engine.scheduleDrum(
@@ -990,6 +1095,7 @@ int handleAudioMessage(
               e[1] as String,
               e[2] as int,
               tomFreq: e[3] as double,
+              tailSec: tail,
             );
           }
         }
@@ -1111,7 +1217,18 @@ int handleAudioMessage(
         }
         break;
       case _cSlots:
-        engine.trackMix.configure(List<String>.from(m[1] as List));
+        {
+          final before = List<String>.of(engine.trackMix.slotNames);
+          engine.trackMix.configure(List<String>.from(m[1] as List));
+          // 편성이 실제로 바뀌었을 때만 — 버스 번호가 달라지니 스웰을 걷는다.
+          // (같은 편성을 다시 보내는 새로고침은 돌던 스웰을 안 끊는다)
+          final after = engine.trackMix.slotNames;
+          if (before.length != after.length ||
+              [for (var i = 0; i < before.length; i++) before[i] != after[i]]
+                  .any((x) => x)) {
+            engine.clearSwell();
+          }
+        }
         break;
       case _cGenreMix:
         {
@@ -1124,10 +1241,12 @@ int handleAudioMessage(
             applyGenreMixTo(engine.trackMix, genre);
             // 킥↔베이스 비켜 주기도 장르 값이다 (계획 6-5)
             engine.duckAmount = kGenreDuck[genre] ?? 0;
+            engine.setDuckBuses(null);
           } else {
             engine.trackMix.configure(const ['bass', 'chord', 'melody']);
             resetGenreMix(engine.trackMix);
             engine.duckAmount = 0;
+            engine.setDuckBuses(null);
           }
         }
         break;

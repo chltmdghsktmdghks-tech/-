@@ -8,7 +8,7 @@
 // 소리는 전부 라이브 버스(`kPartLive`)로 나간다 — 믹서의 라이브 페이더가 이 소리만 잡고,
 // 곡 트랙은 안 건드린다.
 
-import 'synth.dart' show kPartLive;
+import 'synth.dart' show kPartLive, kPartMetro;
 import 'theory.dart';
 
 enum LiveMode { single, chord, arp }
@@ -201,7 +201,11 @@ class MetTick {
 
   /// 지금부터 몇 초 뒤에 놓을 것인가.
   final double delay;
-  const MetTick(this.beat, this.delay);
+
+  /// 판 끝을 넘어 **다음 판 머리 쪽 박**을 미리 잡은 것인가(`wrap: true` 일 때만).
+  /// 이 경우 [beat] 는 다음 판 기준 번호(0 = 다음 판 첫 박)다.
+  final bool next;
+  const MetTick(this.beat, this.delay, {this.next = false});
 }
 
 /// **지금 예약해야 할 박들.**
@@ -220,8 +224,19 @@ List<MetTick> beatsToSend({
   required Set<int> sent,
   double lead = 0.4,
   double gap = 0.03,
+  bool wrap = false,
+  Set<int>? sentNext,
 }) {
   if (loopSec <= 0 || beatSec <= 0) return const [];
+  // ── `wrap` (2026-09-29 (11)) — 판 머리 박(다운비트) 누락 ──
+  // 예전엔 판을 넘는 박을 「다음 바퀴가 잡는다」며 버렸는데, 다음 바퀴에서는
+  // 그 박(0박)이 이미 `gap` 안쪽이라 **영영 안 잡혔다** — 판마다 첫 박이 빠졌다.
+  // `wrap` 이면 판 끝 쪽에서 다음 판 0박·1박…을 미리 잡는다(번호는 다음 판 기준,
+  // `next: true`). 이미 잡았는지는 [sentNext] 로 따로 센다(같은 번호가 이번 판
+  // `sent` 에도 있을 수 있어서 섞으면 안 된다). 판이 정수 박이 아니면 켜지 않는다.
+  final perLoop = loopSec / beatSec;
+  final n = perLoop.round();
+  final canWrap = wrap && n > 0 && (perLoop - n).abs() < 1e-6;
   final out = <MetTick>[];
   final from = nowSec + gap;
   var k = (from / beatSec).ceil();
@@ -229,7 +244,16 @@ List<MetTick> beatsToSend({
   while (k * beatSec < nowSec + lead) {
     final t = k * beatSec;
     // 판을 넘는 것은 **다음 바퀴에** 잡는다 — 넘어가면 `sent` 를 비우기 때문이다
-    if (t >= loopSec) break;
+    if (t >= loopSec - 1e-9) {
+      if (!canWrap) break;
+      final nb = k - n;
+      if (nb >= n) break;
+      if (!(sentNext ?? const <int>{}).contains(nb)) {
+        out.add(MetTick(nb, t - nowSec, next: true));
+      }
+      k++;
+      continue;
+    }
     if (!sent.contains(k)) out.add(MetTick(k, t - nowSec));
     k++;
   }
@@ -244,7 +268,15 @@ List<MetTick> beatsToSend({
 /// 사라진다.** 박을 세는 소리는 곡의 일부가 아니라 **곡을 재는 소리**다. 곡 볼륨에
 /// 딸려 가면 안 된다. 그래서 라이브 버스로 낸다(`kPartLive`).
 ///
-/// 마디 첫 박은 한 옥타브 위로 세게 — 어디가 1박인지 안 들리면 자가 아니다.
+/// 마디 첫 박은 더 높고 세게 — 어디가 1박인지 안 들리면 자가 아니다.
+///
+/// ── 반주에 묻히던 것 (2026-09-29 (10)) ──
+/// 예전 소리는 다운비트 1568Hz·vel3, 나머지 1046.5Hz·**vel1**(세기 0.30) 이라 약박 피크가
+/// 0.05 — 반주 RMS(0.19)보다 12dB 낮았다. 그래서 ① 약박도 vel2 로 올리고(다운비트와의
+/// 차이는 유지) ② 다운비트를 2093Hz 로 올려 반주(주로 1kHz 아래)와 겹치지 않게 하고
+/// ③ 라이브 버스 앞에서 `kMetroGain` 배로 키웠다. ④ 이 음은 `kPartMetro` 로 표시해서
+/// 엔진이 **켜지는 프레임에** 반주를 살짝 누른다(덕킹) — 미리 예약(delay)하는 소리라
+/// 밖에서 따로 예약하면 시각이 어긋난다.
 List<List<dynamic>> metroBatch(
   List<MetTick> ticks, {
   int beatsPerBar = 4,
@@ -253,12 +285,12 @@ List<List<dynamic>> metroBatch(
   for (final t in ticks)
     [
       voice,
-      t.beat % beatsPerBar == 0 ? 1568.0 : 1046.5,
+      t.beat % beatsPerBar == 0 ? 2093.0 : 1568.0,
       0.06, // 짧게 — 길면 박이 아니라 음이 된다
-      t.beat % beatsPerBar == 0 ? 3 : 1,
+      t.beat % beatsPerBar == 0 ? 3 : 2,
       false,
       0.0,
       t.delay,
-      kPartLive,
+      kPartMetro, // 라이브 버스 + 키움 + 덕킹 (kPartLive 와 같은 버스)
     ],
 ];
