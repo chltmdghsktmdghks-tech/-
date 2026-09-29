@@ -9,7 +9,10 @@ import 'package:music_doodle_engine/synth.dart';
 
 void main() {
   test('metroBatch — 다운비트가 더 높고 세며 kPartMetro 로 나간다', () {
-    final b = metroBatch([MetTick(0, 0.0), MetTick(1, 0.5)]);
+    // 다운비트는 두 겹(마림바 + 벨)이라 delay 로 가른다.
+    final all = metroBatch([MetTick(0, 0.0), MetTick(1, 0.5)]);
+    final b = [all.firstWhere((r) => r[6] == 0.0), all.firstWhere((r) => r[6] == 0.5)];
+    expect(all.every((r) => r[7] == kPartMetro), isTrue);
     expect(b[0][7], kPartMetro);
     expect(b[0][1] as double, greaterThan(b[1][1] as double));
     expect(b[0][3] as int, greaterThan(b[1][3] as int));

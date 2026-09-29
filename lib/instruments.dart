@@ -69,7 +69,9 @@ const Inst kInstDefault = Inst(
 
 const Map<String, Inst> INSTRUMENTS = {
   // ── 신스 기본 ──
-  'bass': Inst(wave: 'sawtooth', cut: 560, peak: 0.8, rel: 0.18, holdB: 0.1),
+  // 2026-09-29 청음 피드백("신스 베이스가 너무 크다") + 실측(rms −7.2dB, 핑거베이스 −23.1dB)
+  // 으로 0.8 → 0.40 (−6dB). 웹 원본 값이지만 표본 베이스와 한 밴드로 안 들려서 내렸다.
+  'bass': Inst(wave: 'sawtooth', cut: 560, peak: 0.40, rel: 0.18, holdB: 0.1),
   'pad': Inst(
     wave: 'triangle',
     cut: 1800,
@@ -163,7 +165,7 @@ const Map<String, Inst> INSTRUMENTS = {
     uni: 11,
   ),
   'saw': Inst(wave: 'sawtooth', cut: 2800, peak: 0.26, rel: 0.24, detune: -9),
-  'sine': Inst(wave: 'sine', cut: 5000, peak: 0.5, rel: 0.28, holdB: 0.1),
+  'sine': Inst(wave: 'sine', cut: 5000, peak: 0.35, rel: 0.28, holdB: 0.1),
   'harp': Inst(
     wave: 'triangle',
     cut: 4200,
@@ -176,7 +178,7 @@ const Map<String, Inst> INSTRUMENTS = {
   'wobble': Inst(
     wave: 'sawtooth',
     cut: 420,
-    peak: 0.7,
+    peak: 0.40, // 0.7 → 0.40 (−4.9dB) 2026-09-29 — 피크가 0dB 에 닿았다
     rel: 0.2,
     holdB: 0.08,
     detune: -1200,
@@ -227,7 +229,7 @@ const Map<String, Inst> INSTRUMENTS = {
   'moogbass': Inst(
     wave: 'sawtooth',
     cut: 480,
-    peak: 0.85,
+    peak: 0.45, // 0.85 → 0.45 (−5.5dB) — 신스 베이스와 같은 이유(2026-09-29)
     rel: 0.2,
     holdB: 0.08,
     sub: true,

@@ -113,6 +113,10 @@ class DrumKit {
   /// 드럼 소리"를 노리는 킷만 켠다. 808·909·로파이는 **의도적으로 전자음**
   /// 이라, 표본을 켜면 오히려 그 킷의 정체성이 사라진다(`drum_sampler.dart`).
   final bool sampled;
+
+  /// 어느 표본 세트를 쓰나(`drum_sampler.dart` 의 `kDefaultDrumSet` 참고).
+  /// 되돌리려면 `'avirt'` → `'drum'` 한 줄.
+  final String sampleSet;
   const DrumKit({
     required this.label,
     required this.kick,
@@ -126,12 +130,16 @@ class DrumKit {
     required this.shake,
     required this.cow,
     this.sampled = false,
+    this.sampleSet = kDefaultDrumSet,
   });
 }
 
 const Map<String, DrumKit> DRUM_KITS = {
   'acoustic': DrumKit(
     sampled: true,
+    // 2026-09-29: virtuosity_drums(44.1kHz, CC0)가 기본. 예전 MuldjordKit 은
+    // 'amuld' 키트로 남겨 둔다(A/B·되돌리기).
+    sampleSet: 'avirt',
     label: '어쿠스틱',
     kick: KickK(180, 48, 0.40, 0.028, 0.62, 2800, 0.26, 0.18),
     snare: SnareK(188, 332, 1300, 0.52, 3600, 1.00, 2.2, 5),
@@ -207,6 +215,21 @@ const Map<String, DrumKit> DRUM_KITS = {
     shake: ShakeK(6200, 9000, 0.042),
     cow: CowK(560, 820, 0.16, 2700),
   ),
+  // 예전 어쿠스틱(MuldjordKit, 22.05kHz) — 새 기본(acoustic)과 비교·복구용.
+  'amuld': DrumKit(
+    sampled: true,
+    label: '어쿠스틱(구)',
+    kick: KickK(180, 48, 0.40, 0.028, 0.62, 2800, 0.26, 0.18),
+    snare: SnareK(188, 332, 1300, 0.52, 3600, 1.00, 2.2, 5),
+    hat: HatK(7000, 0.058, 1.00, 0.30, 1.00),
+    tom: TomK(1.00, 0.36, 5, 0.12),
+    crash: CrashK(1.60, 3400, 1.00, 0.55, 1.00),
+    ride: RideK(1.00, 3200, 1.00, 0.40),
+    rim: RimK(1750, 0.038, 0.55, 0.22),
+    clap: ClapK(3, 0.011, 1350, 1.1, 0.17, 0.30),
+    shake: ShakeK(6000, 8800, 0.040),
+    cow: CowK(540, 800, 0.15, 2640),
+  ),
 };
 
 const List<String> DRUM_KIT_ORDER = [
@@ -215,6 +238,7 @@ const List<String> DRUM_KIT_ORDER = [
   'k909',
   'lofi',
   'rock',
+  'amuld',
 ];
 
 const Map<String, String> DRUM_LABEL = {
@@ -240,6 +264,9 @@ const Map<String, String> DRUM_LABEL = {
 ///
 /// 한쪽으로 통일하지 않는 이유: 데이터 쪽 이름은 **사용자가 편집기에서 만든 패턴에
 /// 저장돼 있다.** 바꾸면 그 패턴들이 이름을 잃는다. 그래서 둘 다 받는다.
+/// 합성 하이햇 전체 배수(−12dB) — 표본 킷의 하이햇은 이 값을 안 탄다.
+const double kSynthHatTrim = 0.25;
+
 /// 오픈 하이햇 전용 이름(`hatopen`)의 릴리스 배수 — 닫힌 하이햇 대비. 기본 열림(세기 3)은 3.2배.
 const double kOpenHatRelMul = 6.5;
 
@@ -351,6 +378,17 @@ class DrumVoice {
   Int16List? _smPcm;
   double _smPos = 0, _smRatio = 1, _smGain = 0;
 
+  /// 킥 비터 클릭 합성 겹침 — 남은 샘플 수·경과·진폭. 0 이면 안 쓴다.
+  /// virtuosity 킥은 펠트 비터라 클릭이 거의 없어서(2-6kHz 가 앞 20ms 의 0.4%)
+  /// 폰 스피커에서 「퍽」 없이 둔탁했다. `kDrumKickClick` 참고.
+  int _clickLeft = 0, _clickI = 0;
+
+  /// 표본 고역 살리기(하이 셸프) 상태 — [_brK] 0 이면 안 쓴다. `kDrumSetBright` 참고.
+  double _brK = 0, _brLp = 0;
+  static final double _brA = 1 - math.exp(-2 * math.pi * kDrumBrightCutHz / kSampleRate);
+  double _clickAmp = 0;
+  int _clickSeed = 1;
+
   /// 라운드로빈을 고르는 난수 — 곡을 다시 내보내도 같은 결과가 나오게
   /// 씨앗을 박아 둔다(`_rnd` 와 같은 이유).
   static final math.Random _rrRng = math.Random(20260910);
@@ -423,6 +461,9 @@ class DrumVoice {
   void reset() {
     active = false;
     _sampleMode = false;
+    _brK = 0;
+    _brLp = 0;
+    _clickLeft = 0;
     _life = 0;
     _age = 0;
     _chokeN = 0;
@@ -729,7 +770,9 @@ class DrumVoice {
   void hat(DrumKit kit, int vel, {bool highQuality = true, bool longOpen = false}) {
     reset();
     final k = kit.hat;
-    final v = VG[vel] ?? 1.0;
+    // 합성 하이햇은 잡음·금속이 모두 고음역이라 같은 피크여도 훨씬 크게 들린다 —
+    // 2026-09-29 실측: 808 +4.3dB · 909 +2.4dB 로 스네어(−3.6)보다도 컸다.
+    final v = (VG[vel] ?? 1.0) * kSynthHatTrim;
     // 하이햇은 16비트로 제일 많이 반복된다 — **여기가 머신건이 제일 잘 들리는 자리**라
     // 흔들림 폭을 다른 타악기보다 크게 잡았다.
     _vary(pitch: 0.030, amp: 0.08, tone: 0.10, rel: 0.11);
@@ -1027,16 +1070,21 @@ class DrumVoice {
   /// (`hat()` 의 `open = vel >= 3` 과 같은 경계, `drum_sampler.dart` 문서).
   /// 림샷·박수·쉐이커·카우벨은 표본이 원래 없다(`_kDrumRRCount` 에 없음) —
   /// `ensureDrumPieceLoaded` 가 즉시 반환하고, 여기서도 바로 `false`.
-  bool _startDrumSample(String inst, int vel, double tomFreq) {
+  bool _startDrumSample(
+    String inst,
+    int vel,
+    double tomFreq,
+    String set,
+  ) {
     final piece = switch (inst) {
       'hat' => vel >= 3 ? 'hatOpen' : 'hatClosed',
       'kick' || 'snare' || 'crash' || 'ride' || 'tom' => inst,
       _ => null,
     };
     if (piece == null) return false;
-    final bank = kDrumSampleBanks[piece];
+    final bank = kDrumSampleBanks[drumBankKey(piece, set)];
     if (bank == null) {
-      unawaited(ensureDrumPieceLoaded(piece));
+      unawaited(ensureDrumPieceLoaded(piece, set: set));
       return false;
     }
     reset();
@@ -1047,12 +1095,26 @@ class DrumVoice {
     _sampleMode = true;
     _smPcm = clip.pcm;
     _smPos = 0;
-    final rootFreq = kDrumRootFreq[piece];
+    final rootFreq = drumRootFreq(piece, set);
     final pitchMul = _hit.pitch; // 라운드로빈 위에 얹는 아주 작은 흔들림
     _smRatio = rootFreq == null
         ? (clip.sampleRate / kSampleRate) * pitchMul
         : (tomFreq / rootFreq) * (clip.sampleRate / kSampleRate) * pitchMul;
-    _smGain = (VG[vel] ?? 1.0) * _hit.amp;
+    _smGain = (drumSetVelGain(set, vel, piece) ?? VG[vel] ?? 1.0) *
+        _hit.amp *
+        drumSetTrim(set, piece);
+    _brK = drumSetBright(set, piece);
+    _brLp = 0;
+    final click = piece == 'kick' ? kDrumKickClick[set] : null;
+    if (click != null) {
+      _clickLeft = (kDrumKickClickSec * kSampleRate).round();
+      _clickI = 0;
+      _clickAmp = click *
+          (const {1: 0.25, 2: 0.55, 3: 1.0}[vel] ?? 1.0) *
+          _hit.amp *
+          drumSetTrim(set, piece);
+      _clickSeed = 12345;
+    }
     active = true;
     return true;
   }
@@ -1074,8 +1136,22 @@ class DrumVoice {
     final frac = _smPos - idx;
     final s0 = pcm[idx] / 32768.0;
     final s1 = pcm[idx + 1] / 32768.0;
-    final s = (s0 + (s1 - s0) * frac) * _smGain;
+    var s = (s0 + (s1 - s0) * frac) * _smGain;
+    if (_brK > 0) {
+      _brLp += _brA * (s - _brLp);
+      s += _brK * (s - _brLp);
+    }
     _smPos += _smRatio;
+    if (_clickLeft > 0) {
+      final t = _clickI / kSampleRate;
+      _clickSeed = (_clickSeed * 1103515245 + 12345) & 0x7fffffff;
+      final noise = (_clickSeed / 0x3fffffff) - 1.0;
+      s += _clickAmp *
+          math.exp(-t / kDrumKickClickTau) *
+          (0.6 * math.sin(2 * math.pi * 3200 * t) + 0.4 * noise);
+      _clickI++;
+      _clickLeft--;
+    }
     return s;
   }
 
@@ -1100,7 +1176,7 @@ class DrumVoice {
     // 표본을 안 켰거나(전자음 킷), 이 조각이 표본이 없거나, 아직 로드가
     // 안 끝났으면 그대로 아래 합성 경로로 간다(끊김 없음 — `sampler.dart`
     // 문서와 같은 이유).
-    if (!boom && kit.sampled && _startDrumSample(inst, vel, tomFreq)) {
+    if (!boom && kit.sampled && _startDrumSample(inst, vel, tomFreq, kit.sampleSet)) {
       openHat = inst == 'hat' && vel >= 3;
       final base = _panOf[inst] ?? 0.0;
       _setPan(base);

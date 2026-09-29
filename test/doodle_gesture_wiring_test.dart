@@ -203,7 +203,7 @@ void main() {
       expect(host.of('clearSwell'), isNotEmpty, reason: '편성이 바뀌면 스웰을 걷는다');
     });
 
-    testWidgets('베이스 줄 — 핑거/jbass/신스, 드럼 줄 — 킷(세 줄이 한 킷을 같이 쓴다)', (tester) async {
+    testWidgets('베이스 줄 — 핑거/jbass/신스, 드럼 줄 — 킷은 레인마다 따로(킥만 바뀐다)', (tester) async {
       final (_, p) = await _open(tester, start: false);
       await tester.tap(find.byKey(const ValueKey('order-inst-4')));
       await tester.pumpAndSettle();
@@ -213,14 +213,16 @@ void main() {
       await tester.tapAt(const Offset(5, 5)); // 시트 닫기
       await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const ValueKey('order-inst-0')));
+      final base = _t(p, 'drum').kit;
+      await tester.tap(find.byKey(const ValueKey('order-inst-0'))); // 킥 줄
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('inst-k808')));
       await tester.pumpAndSettle();
-      expect(_t(p, 'drum').kit, 'k808');
+      expect(_t(p, 'drum').kit, base, reason: '트랙 킷(=스네어·하이햇 기본)은 그대로');
+      expect(p.scene.laneKits, {'kick': 'k808'}, reason: '킥 레인만 덮어쓴다');
       await tester.tapAt(const Offset(5, 5));
       await tester.pumpAndSettle();
-      expect(find.text('808'), findsWidgets, reason: '킥·스네어·하이햇 세 줄 모두 새 킷 이름');
+      expect(find.text('808'), findsOneWidget, reason: '킥 줄만 새 킷 이름(스네어·하이햇은 그대로)');
     });
 
     testWidgets('고른 음색이 연주(_pressDown)에 쓰인다 — 코드를 기타로 바꾸면 holdOn 이 guitar', (tester) async {
@@ -257,8 +259,9 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('inst-k909')));
       await tester.pumpAndSettle();
       expect(_t(p, 'chord').voice, 'strings');
-      expect(_t(p, 'drum').kit, 'k909');
+      expect(p.scene.laneKits, {'kick': 'k909'});
       await tester.pumpWidget(const SizedBox()); // 화면을 닫는다 = dispose
+      expect(p.scene.laneKits, isEmpty, reason: '레인 킷도 원래대로');
       expect(_t(p, 'chord').voice, 'piano');
       expect(_t(p, 'drum').kit, 'acoustic');
       expect(_t(p, 'bass').voice, was);
@@ -286,6 +289,22 @@ void main() {
       await tester.pump();
       expect(host.of('drumHoldOn'), isEmpty);
       expect(host.of('drumOn').where((c) => c.$2[1] == 'kick'), hasLength(1));
+      await g.up();
+    });
+
+    testWidgets('레인별 킷: 킥만 808 이면 킥은 붐(k808), 하이햇은 기본 킷 그대로 친다', (tester) async {
+      final (host, p) = await _open(tester, kit: 'acoustic');
+      p.scene.laneKits['kick'] = 'k808';
+      var g = await tester.startGesture(const Offset(200, 300));
+      await tester.pump();
+      expect(host.of('drumHoldOn').map((c) => c.$2[1]).toSet(), {'k808'});
+      await g.up();
+      await tester.tap(find.text('HI-HAT').first);
+      await tester.pump(const Duration(milliseconds: 100));
+      host.calls.clear();
+      g = await tester.startGesture(const Offset(200, 300));
+      await tester.pump();
+      expect(host.of('drumOn').map((c) => c.$2[0]).toSet(), {'acoustic'});
       await g.up();
     });
 

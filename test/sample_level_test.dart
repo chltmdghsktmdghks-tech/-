@@ -30,6 +30,8 @@ const Map<String, double> _testFreq = {
   'violin': 440.00,
 };
 
+const Set<String> _pluckedBass = {'fingerbass', 'jbass'};
+
 double _db(double v) => v <= 1e-9 ? -120 : 20 * math.log(v) / math.ln10;
 
 double _peak(String voice, double freq, int vel) {
@@ -45,6 +47,26 @@ double _peak(String voice, double freq, int vel) {
     if (b > pk) pk = b;
   }
   return pk;
+}
+
+/// 제일 시끄러운 100ms 의 RMS — 귀로 느끼는 크기에 가깝다.
+double _rms100(String voice, double freq, int vel) {
+  final n = SynthNote();
+  n.noteOn(voice, freq, 2.0, vel);
+  final w = (0.1 * kSampleRate).round();
+  final buf = List<double>.filled(w, 0);
+  var acc = 0.0, best = 0.0, i = 0;
+  for (var k = 0; k < (3.0 * kSampleRate).round(); k++) {
+    if (!n.active) break;
+    n.next();
+    final m = (n.outL + n.outR) * 0.5;
+    final j = i % w;
+    acc += m * m - buf[j] * buf[j];
+    buf[j] = m;
+    i++;
+    if (i >= w) best = math.max(best, math.sqrt(math.max(0, acc) / w));
+  }
+  return best;
 }
 
 void main() {
@@ -73,6 +95,9 @@ void main() {
   test('악기끼리 피크가 맞는다 — 한 밴드로 들려야 한다', () {
     final pk = <String, double>{};
     for (final v in kSampleBanks.keys) {
+      // 뜯는 베이스는 피크가 아니라 RMS 로 맞춘다(아래 시험) — 어택만 뾰족해서
+      // 피크를 맞추면 지속음보다 16dB 작게 들린다(2026-09-29 청음 "베이스가 작다").
+      if (_pluckedBass.contains(v)) continue;
       pk[v] = _peak(v, _testFreq[v] ?? 261.63, 3);
     }
     final lo = _db(pk.values.reduce(math.min));
@@ -94,5 +119,18 @@ void main() {
           reason: '$v — 세게(${_db(p3).toStringAsFixed(1)}dB)가 '
               '여리게(${_db(p1).toStringAsFixed(1)}dB)보다 커야 한다');
     }
+  });
+
+  test('베이스끼리 RMS 가 맞는다 — 표본 베이스가 신스 베이스에 안 묻힌다', () {
+    final r = <String, double>{
+      for (final v in ['bass', 'moogbass', 'upright', 'fingerbass', 'jbass'])
+        v: _db(_rms100(v, 65.41, 3)),
+    };
+    // ignore: avoid_print
+    print('베이스 RMS $r');
+    final lo = r.values.reduce(math.min), hi = r.values.reduce(math.max);
+    // 맞추기 전: 신스 베이스 −7.2 vs 핑거 −23.1 (폭 15.9dB)
+    expect(hi - lo, lessThan(6.5), reason: '베이스 RMS 폭 ${(hi - lo).toStringAsFixed(1)}dB');
+    expect(r['bass']!, lessThan(r['jbass']! + 2.0), reason: '신스 베이스가 J베이스보다 훨씬 크면 안 된다');
   });
 }

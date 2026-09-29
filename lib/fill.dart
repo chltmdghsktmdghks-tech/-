@@ -73,6 +73,7 @@ void applyFill(
   double? totalSec,
   bool crashOnStart = false,
   int spb = 16,
+  String Function(String lane)? kitForLane, // 레인별 킷(없으면 전부 [kit])
 }) {
   if (spec.amount <= 0 || loopBars <= 0 || reps <= 0) return;
   // 구간 **첫 박의 크래시.**
@@ -149,7 +150,7 @@ void applyFill(
       // 앞쪽은 굴리고, 뒤쪽은 떨어뜨린다 — 음정이 내려가며 다음 마디로 간다
       final lane = k < 0.5 ? rollLane : dropLane;
       final tomF = 200.0 - k * 70; // 탐이 점점 낮아진다
-      drums.add([kit, lane, vel, tomF, t]);
+      drums.add([kitForLane?.call(lane) ?? kit, lane, vel, tomF, t]);
     }
 
     // ③ 다음 마디 첫 박에 크래시 — 매듭

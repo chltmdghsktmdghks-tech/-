@@ -357,6 +357,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   /// 씬에 남기지 않고 나가면 되돌린다(`dispose`). 드럼 트랙은 킷을 든다.
   final Map<String, String> _origVoice = {};
 
+  /// 들어올 때의 레인별 킷 덮어쓰기(`Scene.laneKits`) — 나갈 때 되돌리기용.
+  Map<String, String> _origLaneKits = {};
+
+  /// [lane] 을 칠 킷 — 레인 덮어쓰기가 있으면 그것, 없으면 트랙 킷(=옛 동작).
+  String _kitOfLane(String lane) =>
+      drumKitFor(_drumTrack.kit, _origScene.laneKits, lane);
+
   /// 마지막으로 치는 자리의 크기 — 롤 도중 크레셴도가 폭(1/4 단위)을 재려고 쓴다.
   Size _area = Size.zero;
 
@@ -631,6 +638,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     );
     p.setClip(_chordTrack, _chordPatternName);
     _origVoice[_drumTrack.id] = _drumTrack.kit;
+    _origLaneKits = Map<String, String>.from(_origScene.laneKits);
     _origVoice[_bassTrack.id] = _bassTrack.voice;
     _origVoice[_chordTrack.id] = _chordTrack.voice;
 
@@ -829,6 +837,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
       if (savedKinds.contains(k) || o == null) return;
       if (k == DoodleKind.drum) {
         t.kit = o;
+        _origScene.laneKits
+          ..clear()
+          ..addAll(_origLaneKits);
       } else {
         t.voice = o;
       }
@@ -1412,13 +1423,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     switch (_stageDef.kind) {
       case DoodleKind.drum:
         final lane = _stageDef.drumLane!;
-        if (lane == 'kick' && doodleBoomKit(_drumTrack.kit)) {
+        final laneKit = _kitOfLane(lane);
+        if (lane == 'kick' && doodleBoomKit(laneKit)) {
           // **808 붐** — 누르는 동안 서브가 유지되고, 뗄 때 누른 만큼(`boomTailFor`) 울다 진다
           // (`_pressUp`). 표본 킷(어쿠스틱·록)은 붐이 합성 킥으로 바뀌므로 한 방만 친다.
           f.boomHeld = true;
-          widget.host?.drumHoldOn(_kHoldId + pad, _drumTrack.kit, vel);
+          widget.host?.drumHoldOn(_kHoldId + pad, laneKit, vel);
         } else {
-          widget.host?.drumOn(_drumTrack.kit, lane, vel);
+          widget.host?.drumOn(laneKit, lane, vel);
         }
         // 타악은 길이가 없다 — 그 자리에 한 칸.
         if (recording) rec?.up(pad, pos);
@@ -1729,7 +1741,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         if (now.isBefore(next)) continue;
         f.openFired = true;
         f.rollNext = null;
-        hits.add([_drumTrack.kit, 'hatopen', f.vel, 180.0, 0.0]);
+        hits.add([_kitOfLane('hatopen'), 'hatopen', f.vel, 180.0, 0.0]);
         HapticFeedback.selectionClick(); // 「열렸다」 — 상태가 바뀌는 순간 한 번
         _addRipple(Offset(f.downX, f.downY), 3, now: now, roll: true);
         continue;
@@ -1790,7 +1802,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
         // **지금 X 로** 세기가 오른다(가로 = 세기 그대로). 밀지 않으면 예전과 같다.
         final base = f.vel > 1 ? f.vel - 1 : 1;
         final rv = rollVel(base, f.curX - f.downX, _area.width);
-        hits.add([_drumTrack.kit, lane, rv, 180.0, delay]);
+        hits.add([_kitOfLane(lane), lane, rv, 180.0, delay]);
         // **도는 중 표시**(사용자 지시, 2026-09-24) — 이 연타가 실제로 들릴
         // 시각을 남겨 두면, 화면(`_rollFlashing`)이 그 시각 바로 뒤 짧은
         // 창에서 패드를 깜빡여 "지금 격자에 맞춰 돌고 있다"를 보여 준다.
@@ -2152,13 +2164,13 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
   // 나가면 `dispose` 가 원래 값으로 되돌린다.
 
   String _instrumentOf(DoodleStage s) => switch (s.kind) {
-    DoodleKind.drum => _drumTrack.kit,
+    DoodleKind.drum => _kitOfLane(s.drumLane ?? 'kick'),
     DoodleKind.bass => _bassTrack.voice,
     DoodleKind.chord => _chordTrack.voice,
   };
 
   String _instrumentLabel(DoodleStage s) => s.kind == DoodleKind.drum
-      ? doodleKitLabel(_drumTrack.kit)
+      ? doodleKitLabel(_instrumentOf(s))
       : doodleVoiceLabel(_instrumentOf(s));
 
   List<String> _instrumentChoices(DoodleStage s) => doodleChoicesWith(
@@ -2170,7 +2182,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     _instrumentOf(s),
   );
 
-  /// [v] 를 그 단계의 악기로 삼는다. 드럼 세 단계(킥·스네어·하이햇)는 **한 트랙**이라 킷을 같이 쓴다.
+  /// [v] 를 그 단계의 악기로 삼는다. 드럼 세 단계(킥·스네어·하이햇)는 한 트랙이지만 **킷은 레인마다 따로**(`Scene.laneKits`) 고른다.
   void _setInstrument(DoodleStage s, String v) {
     if (_instrumentOf(s) == v) {
       _previewInstrument(s);
@@ -2178,7 +2190,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     }
     switch (s.kind) {
       case DoodleKind.drum:
-        _drumTrack.kit = v;
+        // 이 단계의 레인만 바꾼다 — 킥 단계에선 킥 킷만, 하이햇 단계에선 하이햇 킷만.
+        final key = laneKitKey(s.drumLane ?? 'kick');
+        if (v == _drumTrack.kit) {
+          _origScene.laneKits.remove(key); // 기본 킷으로 돌아오면 덮어쓰기를 걷는다
+        } else {
+          _origScene.laneKits[key] = v;
+        }
+        _drumTrack.ping();
       case DoodleKind.bass:
         _bassTrack.voice = v;
       case DoodleKind.chord:
@@ -2196,7 +2215,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
     if (h == null) return;
     switch (s.kind) {
       case DoodleKind.drum:
-        h.drumOn(_drumTrack.kit, s.drumLane ?? 'kick', 2);
+        h.drumOn(_instrumentOf(s), s.drumLane ?? 'kick', 2);
       case DoodleKind.bass:
         h.noteOn(
           _bassTrack.voice,
@@ -2931,7 +2950,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView> {
                       '꾹 누르면 굴러갑니다 · 세게 누르면 16분, 여리게 누르면 8분으로 · 롤 중 오른쪽으로 밀면 점점 세져요')
           : '위쪽은 정타, 아래쪽은 고스트(여린 킥) · 오른쪽일수록 세게\n'
                 '킥은 **어디에 놓는가**가 전부입니다 · 두 손가락으로 번갈아 쳐도 됩니다'
-                '${doodleBoomKit(_drumTrack.kit) ? '\n길게 누르면 808 서브가 그만큼 웅— 울어요' : ''}',
+                '${doodleBoomKit(_kitOfLane('kick')) ? '\n길게 누르면 808 서브가 그만큼 웅— 울어요' : ''}',
     DoodleKind.bass =>
       '위로 갈수록 높은 음 · 오른쪽으로 갈수록 세게\n'
           '톡 치면 짧게, 잡으면 길게(오래 잡을수록 꼬리도 길게) · 잡은 채 위아래로 끌면 미끄러집니다',

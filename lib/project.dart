@@ -1027,10 +1027,22 @@ const List<String> kDefaultCritters = [
   '@hero',
 ];
 
+/// 레인별 킷 덮어쓰기의 열쇠 — `hatopen`(오픈 하이햇)은 하이햇 킷을 따른다.
+String laneKitKey(String lane) => lane == 'hatopen' ? 'hat' : lane;
+
+/// [lane] 을 칠 킷. [laneKits] 에 그 레인 덮어쓰기가 있으면 그것, 없으면 [base].
+/// 덮어쓰기가 비어 있으면 늘 [base] 라 옛 동작(세 레인 같은 킷)과 똑같다.
+String drumKitFor(String base, Map<String, String> laneKits, String lane) =>
+    laneKits[laneKitKey(lane)] ?? base;
+
 class Scene {
   String name;
   double? bpm;
   String? kit;
+
+  /// **레인별 킷 덮어쓰기**(두들플레이, 2026-09-29) — 예: `{'hat': '808'}` 이면 킥·스네어는
+  /// [kit](또는 트랙 킷), 하이햇만 808. 비어 있으면 전 레인이 같은 킷이다(옛 동작).
+  final Map<String, String> laneKits;
 
   /// 이 씬에 붙인 **캐릭터**(`@dancer` 같은 값이거나 그냥 이모지). 없으면 null.
   ///
@@ -1048,7 +1060,9 @@ class Scene {
     this.kit,
     this.critter,
     Map<String, String?>? clips,
-  }) : clips = clips ?? {};
+    Map<String, String>? laneKits,
+  }) : clips = clips ?? {},
+       laneKits = laneKits ?? {};
 
   Map<String, dynamic> toJson() => {
     'name': name,
@@ -1056,6 +1070,7 @@ class Scene {
     'kit': kit,
     'critter': critter,
     'clips': clips,
+    if (laneKits.isNotEmpty) 'laneKits': laneKits,
   };
 
   factory Scene.fromJson(Map<String, dynamic> j) => Scene(
@@ -1067,6 +1082,10 @@ class Scene {
       for (final e in (j['clips'] as Map).entries)
         e.key as String: e.value as String?,
     },
+    laneKits: {
+      for (final e in ((j['laneKits'] as Map?) ?? const {}).entries)
+        e.key as String: e.value as String,
+    },
   );
 
   Scene copyWith(String newName) => Scene(
@@ -1075,6 +1094,7 @@ class Scene {
     kit: kit,
     critter: critter,
     clips: Map<String, String?>.from(clips),
+    laneKits: Map<String, String>.from(laneKits),
   );
 }
 

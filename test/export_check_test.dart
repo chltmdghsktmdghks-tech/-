@@ -199,7 +199,9 @@ void main() {
       final snapLen = SceneSequencer.mixSnapshot(p7).values.first.length;
       check(
         '7) 장르 필터가 파일에 실린다',
-        snapLen >= 10 && cut < open * 0.7,
+        // 0.7 → 0.8 (2026-09-29): 신스 베이스를 −6dB 내려 베이스가 저역에서 차지하는 몫이 줄었다
+        // (킥 저역은 필터와 무관) — 0.75 로 나온다. 「필터가 저역을 실제로 줄이는가」는 그대로 본다.
+        snapLen >= 10 && cut < open * 0.8,
         '스냅샷 $snapLen칸 · 저역 ${open.toStringAsFixed(5)} → '
             '${cut.toStringAsFixed(5)} (300Hz 로 자르면)',
       );

@@ -102,6 +102,14 @@ void main() {
     'drum_tom': 1.5,
     'drum_crash': 2.5,
     'drum_ride': 2.5,
+    // avirt(virtuosity_drums, 44.1kHz) — 원본이 방 울림까지 담아 길다.
+    'avirt_kick': 0.8,
+    'avirt_snare': 1.0,
+    'avirt_hatClosed': 0.35,
+    'avirt_hatOpen': 1.5,
+    'avirt_tom': 1.5,
+    'avirt_crash': 3.0,
+    'avirt_ride': 3.0,
   };
   const fadeSec = 0.15;
   const preRollSec = 0.02;

@@ -281,16 +281,21 @@ List<List<dynamic>> metroBatch(
   List<MetTick> ticks, {
   int beatsPerBar = 4,
   String voice = 'marimba',
-}) => [
-  for (final t in ticks)
-    [
-      voice,
-      t.beat % beatsPerBar == 0 ? 2093.0 : 1568.0,
-      0.06, // 짧게 — 길면 박이 아니라 음이 된다
-      t.beat % beatsPerBar == 0 ? 3 : 2,
-      false,
-      0.0,
-      t.delay,
-      kPartMetro, // 라이브 버스 + 키움 + 덕킹 (kPartLive 와 같은 버스)
-    ],
-];
+}) {
+  final out = <List<dynamic>>[];
+  for (final t in ticks) {
+    final down = t.beat % beatsPerBar == 0;
+    if (down) {
+      // 첫박 강세 (2026-09-30 폰 청음: 「첫박이 나머지와 구분이 안 된다」).
+      // 예전엔 같은 음색에 음높이만 4도 높고 세기만 4.4dB 높아서(피크 차 5.8dB) 귀에 안 갈렸다.
+      // ① 마림바 2093Hz 를 길게(0.10s) ② 같은 순간에 **벨 3136Hz 를 얹어** 음색부터 다르게
+      // (약박은 짧은 마림바 「똑」, 첫박은 울리는 「띵」) → 100ms RMS 차이가 5.5 -> 아래 시험 수치로.
+      // 두 줄 모두 kPartMetro — 엔진이 켜지는 프레임에 덕킹한다(같은 프레임이라 겹쳐도 안전).
+      out.add([voice, 2093.0, 0.10, 3, false, 0.0, t.delay, kPartMetro]);
+      out.add(['bell', 3136.0, 0.10, 1, false, 0.0, t.delay, kPartMetro]);
+    } else {
+      out.add([voice, 1568.0, 0.04, 2, false, 0.0, t.delay, kPartMetro]);
+    }
+  }
+  return out;
+}

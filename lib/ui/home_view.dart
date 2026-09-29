@@ -9,6 +9,7 @@
 // 필터가 위쪽 가로 줄로 접힌다.
 import 'package:flutter/material.dart';
 
+import '../feel.dart';
 import '../audio_isolate.dart';
 import '../fx.dart' show masterPresetForGenre;
 import '../genres.dart' show genreDef, kGenres;
@@ -323,6 +324,9 @@ class _HomeViewState extends State<HomeView> {
       // 깔아서 남의 악기·다른 씬이 채워졌다. 소리 몫(음색·킷·믹스)만 얕게 얹는다.
       await store?.newSong(name: name, blank: true);
       project.setGenreBare(genre);
+      // 두들 곡은 **친 대로** 나와야 한다 — `Feel.none` 도 필·변형은 0.6(켬)이라
+      // 자동 필인(크래시 '띵~')이 붙고 하이햇이 바퀴마다 덜어졌다(2026-09-30).
+      project.setFeel(Feel.none.copyWith(fill: 0, vary: 0));
       // 빈 시작이라 `newSong` 은 장르 없는 마스터링을 얹었다 — 고른 장르 몫으로 맞춘다.
       store?.master.applyGenrePreset(masterPresetForGenre(genre));
     // `setGenreBare` 는 `Project` 안의 장르 이름만 바꾼다 — 실제 재생 빠르기·조는

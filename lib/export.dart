@@ -24,6 +24,7 @@ import 'package:flutter/services.dart'
     show BackgroundIsolateBinaryMessenger, RootIsolateToken;
 
 import 'drum_sampler.dart' show ensureDrumPieceLoaded;
+import 'drums.dart' show DRUM_KITS;
 import 'engine.dart';
 import 'sampler.dart' show ensureInstrumentLoaded, kSampleInstrumentKeys;
 import 'synth.dart' show Human;
@@ -238,7 +239,11 @@ Future<void> preloadExportSamples(ExportJob job) async {
     await ensureInstrumentLoaded(v);
   }
   final kits = <String>{for (final d in job.drums) d[0] as String};
-  if (kits.contains('acoustic') || kits.contains('rock')) {
+  final sets = <String>{
+    for (final k in kits)
+      if (DRUM_KITS[k]?.sampled ?? false) DRUM_KITS[k]!.sampleSet,
+  };
+  for (final set in sets) {
     for (final piece in [
       'kick',
       'snare',
@@ -248,7 +253,7 @@ Future<void> preloadExportSamples(ExportJob job) async {
       'ride',
       'tom',
     ]) {
-      await ensureDrumPieceLoaded(piece);
+      await ensureDrumPieceLoaded(piece, set: set);
     }
   }
 }

@@ -132,6 +132,7 @@ class SceneSequencer {
     required int baseStep,
     required int part,
     required String kit,
+    Map<String, String> laneKits = const {},
     required int v,
     required int limitStep,
     bool Function(int stepInSection)? skip,
@@ -143,7 +144,7 @@ class SceneSequencer {
         final st = baseStep + h.step;
         if (st >= limitStep) continue;
         if (skip != null && skip(st)) continue;
-        drums.add([kit, h.lane, h.vel, 180.0, at + st * stepSec]);
+        drums.add([drumKitFor(kit, laneKits, h.lane), h.lane, h.vel, 180.0, at + st * stepSec]);
       }
       return;
     }
@@ -269,6 +270,7 @@ class SceneSequencer {
     final stepSec = 60.0 / (bpm ?? tr.bpm) / 4; // 16분음표 하나
     String? clipOf(Track t) => from == null ? t.pattern : from.clips[t.id];
     String kitOf(Track t) => from?.kit ?? t.kit;
+    final laneKits = (from ?? p.scene).laneKits;
     final playable = [
       for (final t in p.tracks)
         if (p.audible(t) && clipOf(t) != null) t,
@@ -335,6 +337,7 @@ class SceneSequencer {
             baseStep: baseStep,
             part: part,
             kit: kitOf(t),
+            laneKits: laneKits,
             v: v,
             limitStep: (rep + 1) * loopSteps,
             skip: lanes == null ? null : (st) => taken(t, st),
@@ -369,6 +372,7 @@ class SceneSequencer {
             baseStep: baseStep,
             part: part,
             kit: kitOf(t),
+            laneKits: laneKits,
             v: varyIndex((barsBefore + c.bar) ~/ cb, vary),
             limitStep: math.min(loopSteps * n, (c.bar + cb) * spb),
           );
@@ -392,6 +396,8 @@ class SceneSequencer {
         totalSec: loopSec * n,
         crashOnStart: afterFill,
         spb: spb,
+        kitForLane: (lane) =>
+            drumKitFor(kitOf(drumTrack.first), laneKits, lane),
       );
     }
 
