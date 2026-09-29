@@ -86,6 +86,11 @@ void main() {
     );
     await tester.tap(find.text('나중에 짓기'));
     await settle();
+    // 3-b) 이름 다음에 시작 방식(질문/두드려/처음부터)을 고른다.
+    check('3-b) 시작 방식 시트가 뜬다',
+        find.text('처음부터 직접 만들기').evaluate().isNotEmpty, '');
+    await tester.tap(find.text('처음부터 직접 만들기'));
+    await settle();
     final modes = ['씬', '타임라인', '라이브', '쇼'];
     final tabsShown = modes.where((m) => find.byTooltip(m).evaluate().isNotEmpty).length;
     check('3) 네 모드 탭이 다 있다', tabsShown == 4, '$tabsShown/4 · ${modes.join(' · ')}');

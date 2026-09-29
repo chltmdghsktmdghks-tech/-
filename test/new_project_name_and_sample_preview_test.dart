@@ -89,6 +89,16 @@ void main() {
     await tester.enterText(find.byType(TextField), '여름밤 로파이');
     await tester.runAsync(() async {
       await tester.tap(find.text('확인'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await settle();
+    // 이름 다음에 시작 방식 선택 시트 — 고르기 전엔 곡이 안 만들어진다.
+    check('1-c) 시작 방식 시트, 아직 곡 안 늘었다',
+        find.text('처음부터 직접 만들기').evaluate().isNotEmpty &&
+            store.songs.length == before,
+        '${store.songs.length}');
+    await tester.runAsync(() async {
+      await tester.tap(find.text('처음부터 직접 만들기'));
       await Future<void>.delayed(const Duration(milliseconds: 300));
     });
     await settle();
@@ -108,6 +118,11 @@ void main() {
     await settle();
     await tester.runAsync(() async {
       await tester.tap(find.text('나중에 짓기'));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+    await settle();
+    await tester.runAsync(() async {
+      await tester.tap(find.text('처음부터 직접 만들기'));
       await Future<void>.delayed(const Duration(milliseconds: 300));
     });
     await settle();
