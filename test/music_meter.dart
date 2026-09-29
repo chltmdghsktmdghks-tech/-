@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:music_doodle_engine/genres.dart';
 import 'package:music_doodle_engine/patterns.dart';
 import 'package:music_doodle_engine/project.dart';
-import 'package:music_doodle_engine/song.dart';
 
 const _rn = ['i', 'ii', 'III', 'iv', 'v', 'VI', 'VII'];
 

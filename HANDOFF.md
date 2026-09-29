@@ -12087,3 +12087,29 @@ B0(30.87Hz) 표본은 없다 — 사용자 결정대로 **E1(41.20Hz, 4자리 �
 - 다음 라운드(editor-ui/design): `VOICE_LABEL['jbass']`(예: "J-Bass")·`ALL_VOICES`·
   `kVoiceFamily['베이스']`·`project.dart`의 `kInstrumentPicks`에 추가해야 실제로 고를 수
   있다. 이번엔 일부러 안 했다.
+
+## 2026-09-29 — 앱 전체 점검: 저대비 글자·초소형 글자·툴팁 정리
+
+### 증상/이유
+"앱의 모든 기능을 테스트하고 개선점 보고, 개선, 디자인도 개선." 화면 스냅샷
+(`test/screen_snap.dart`)으로 전 화면을 뽑아 보니 씬·곡·믹서·FX·에디터의 안내문과
+라벨이 거의 안 보였다(배경 #101114 위 `white24`≈2:1, `white38`≈4:1 — 읽기 기준 4.5:1 미달).
+
+### 원인
+글자색을 화면마다 `white24/30/38` 로 따로 적어 왔고(`design.dart` 의 `DS.textDim` =
+white54 는 정의만 있고 안 쓰였다), 9~9.5px 초소형 글자도 여럿이었다.
+
+### 고친 방법
+- `TextStyle` 안의 `white24/30/38`·alpha 0.2~0.3x → `white54` (**86곳, 15개 화면**).
+  비활성 표시(`onTap == null`, `muted`, `looping ?` 등)는 의도라 `white38` 까지만 올렸다.
+- 8.5·9·9.5px 글자 → 10px.
+- 툴팁 없던 아이콘 버튼 4개(쇼 뒤로·재생, 곡 구간 지우기, 곡 목록 더보기)에 `tooltip`,
+  거의 안 보이던 구간 지우기 ✕ 는 `white24` → `white54`.
+- `test/screen_snap.dart` 가 시트 구성이 바뀌어 죽던 것(인서트·기타 앰프) 가드 추가.
+- 시험 파일의 analyze 경고 5건 정리.
+- 손대지 않은 것: `home_view`·`doodle_play_view`·`project_settings_sheet`·`sampler`
+  (작업 중이던 미커밋 변경과 충돌하지 않게 뺐다 — 같은 저대비 정리가 아직 필요하다).
+
+### 확인
+- `flutter analyze` 36 → 31건(warning 0), `flutter test` 206개 통과(작업 전후 동일).
+- 스냅샷 29장 재생성, 씬 화면 안내문·라벨 가독 확인. 실기기 확인은 아직.

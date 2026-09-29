@@ -261,7 +261,6 @@ void main() {
       await tester.tap(find.byIcon(Icons.auto_fix_off));
       await tester.pump();
       final from = _cell(tester, 14, 1, 15);
-      final to = _cell(tester, 14, 7, 15);
       // 격자 훑기는 **꾹 누르고** 시작한다(찍기 드래그와 같은 길이다 —
       // 안 그러면 세로 스크롤과 부딪힌다)
       final g = await tester.startGesture(from);

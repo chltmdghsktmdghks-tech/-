@@ -547,12 +547,10 @@ class _Header extends StatelessWidget {
             child: Row(
               children: [
                 IconButton(
-                  tooltip: '뒤로',
                   onPressed: show ? onBack : null,
                   icon: const Icon(Icons.arrow_back, color: Colors.white70),
                 ),
                 IconButton(
-                  tooltip: playing ? '멈춤' : '재생',
                   onPressed: show ? onPlay : null,
                   icon: Icon(
                     playing ? Icons.stop_circle : Icons.play_circle,

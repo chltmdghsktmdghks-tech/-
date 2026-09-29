@@ -224,7 +224,7 @@ class BandPainter extends CustomPainter {
         style: TextStyle(
           fontSize: 11 * (0.8 + 0.2 * s),
           fontWeight: FontWeight.w700,
-          color: muted ? Colors.white24 : Colors.white54,
+          color: muted ? Colors.white38 : Colors.white54,
         ),
       ),
       textAlign: TextAlign.center,

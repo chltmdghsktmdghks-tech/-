@@ -428,7 +428,7 @@ void main() {
     // 트랙과 같은 인터페이스 — 화면(FxRack)이 하나로 돌아가는 근거
     check(
       '16) 트랙과 같은 통로',
-      m is FxChainOwner && proj.tracks.first is FxChainOwner,
+      m is FxChainOwner && proj.tracks.first is FxChainOwner, // ignore: unnecessary_type_check
       '',
     );
 
@@ -436,7 +436,7 @@ void main() {
     final mjson = [for (final f in m.chain) f.toJson()];
     final m2 = MasterChannel();
     for (final j in mjson) {
-      m2.chain.add(FxSlot.fromJson(j as Map<String, dynamic>));
+      m2.chain.add(FxSlot.fromJson(j));
     }
     check(
       '17) 마스터 저장·되살리기',

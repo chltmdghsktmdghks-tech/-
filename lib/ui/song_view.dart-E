@@ -2565,10 +2565,9 @@ class _SectionRow extends StatelessWidget {
               ),
             ),
             IconButton(
-              tooltip: '구간 지우기',
               onPressed: () => _confirmDelete(context),
               iconSize: 18,
-              color: Colors.white54,
+              color: Colors.white24,
               icon: const Icon(Icons.close),
             ),
           ],

@@ -211,8 +211,7 @@ class _SongsViewState extends State<SongsView> {
                           ),
                           IconButton(
                             icon: const Icon(Icons.more_vert, size: 20),
-                            color: Colors.white54,
-                            tooltip: '더 보기',
+                            color: Colors.white38,
                             onPressed: () => _menu(context, s),
                           ),
                         ],

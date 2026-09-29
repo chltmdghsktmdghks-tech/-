@@ -322,23 +322,28 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     await tester.runAsync(() => _shot(tester, '8_인서트_랙'));
 
-    await tester.tap(find.text('인서트 꽂기'));
-    for (var i = 0; i < 5; i++) {
-      await tester.pump(const Duration(milliseconds: 120));
+    // 시트 구성이 바뀌어도 도구가 죽지 않게 — 없으면 이 장만 건너뛴다.
+    if (find.text('인서트 꽂기').evaluate().isNotEmpty) {
+      await tester.tap(find.text('인서트 꽂기'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      await tester.runAsync(() => _shot(tester, '9_인서트_고르기'));
     }
-    await tester.runAsync(() => _shot(tester, '9_인서트_고르기'));
 
-    await tester.tap(find.text('기타 앰프'));
-    for (var i = 0; i < 5; i++) {
-      await tester.pump(const Duration(milliseconds: 120));
+    if (find.text('기타 앰프').evaluate().isNotEmpty) {
+      await tester.tap(find.text('기타 앰프'));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      await tester.runAsync(() => _shot(tester, '10_플러그인_창'));
+      // 창 닫고 랙으로 — 꽂힌 뒤 모습
+      await tester.tapAt(const Offset(200, 40));
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
+      await tester.runAsync(() => _shot(tester, '11_꽂힌_뒤'));
     }
-    await tester.runAsync(() => _shot(tester, '10_플러그인_창'));
-    // 창 닫고 랙으로 — 꽂힌 뒤 모습
-    await tester.tapAt(const Offset(200, 40));
-    for (var i = 0; i < 5; i++) {
-      await tester.pump(const Duration(milliseconds: 120));
-    }
-    await tester.runAsync(() => _shot(tester, '11_꽂힌_뒤'));
 
     // ── 가로 ──
     turn(true);
