@@ -204,6 +204,11 @@ class _ModeBar extends StatelessWidget {
     required this.onSettings,
   });
 
+  static Widget _nameBox({required bool landscape, required Widget child}) =>
+      landscape
+          ? ConstrainedBox(constraints: const BoxConstraints(maxWidth: 120), child: child)
+          : Flexible(child: child);
+
   @override
   Widget build(BuildContext context) {
     // **탭 네 개가 스크롤 없이 늘 다 보여야 한다.** 처음엔 가로 스크롤 줄로
@@ -228,7 +233,11 @@ class _ModeBar extends StatelessWidget {
               icon: const Icon(Icons.arrow_back, size: 20),
             ),
             if (!compact)
-              Flexible(
+              // 가로에서는 이름이 탭과 남는 폭을 반씩 나눠 탭 글자가 "타…" 로 잘렸다.
+              // 이름은 최대 폭을 정해 두고 탭이 나머지를 다 쓴다. 세로는 그대로.
+              _nameBox(
+                landscape: MediaQuery.of(context).orientation ==
+                    Orientation.landscape,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: Text(
@@ -321,6 +330,7 @@ class _ModeTab extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(9),
           child: Container(
+            constraints: const BoxConstraints(minHeight: 44),
             padding: EdgeInsets.symmetric(horizontal: compact ? 4 : 12, vertical: 8),
             alignment: Alignment.center,
             decoration: BoxDecoration(

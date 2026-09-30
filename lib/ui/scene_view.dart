@@ -350,77 +350,120 @@ class _SceneViewState extends State<SceneView> {
 
   @override
   Widget build(BuildContext context) {
+    // 가로로 누우면(폭 > 높이) 좌우 2단: 왼쪽에 재생·씬·마디·채우기, 오른쪽에 트랙 목록.
+    // 세로 Column 을 그대로 늘리면 위쪽 컨트롤이 높이를 먹어 트랙이 한 줄밖에 안 보였다.
+    // 세로 배치는 그대로다.
+    return LayoutBuilder(
+      builder: (context, c) {
+        final wide = c.maxWidth > c.maxHeight && c.maxWidth >= 560;
+        if (!wide) return _buildPortrait();
+        final leftW = (c.maxWidth * 0.4).clamp(300.0, 400.0);
+        return Row(
+          children: [
+            SizedBox(
+              width: leftW,
+              child: DecoratedBox(
+                decoration: const BoxDecoration(
+                  border: Border(right: BorderSide(color: Colors.white12)),
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ..._controls(wrap: true),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 10, 8, 10),
+                        child: _fillButton(),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Expanded(child: _trackList(withFill: false)),
+          ],
+        );
+      },
+    );
+  }
+
+  List<Widget> _controls({bool wrap = false}) => [
+    _Transport(
+      transport: widget.transport,
+      info: _info,
+      onPlay: _play,
+      onStop: _stop,
+    ),
+    _SceneBar(
+      project: widget.project,
+      transport: widget.transport,
+      host: widget.host,
+      loopSec: _loopSec,
+      bpm: widget.transport.bpm,
+      onLaunch: _launch,
+      onChanged: _refresh,
+      recording: _arr != null,
+      recCount: _arr?.count ?? 0,
+      onRecord: _toggleArrange,
+      wrap: wrap,
+    ),
+    // 재생 위치 — **자기 위젯**이다. 지표가 250ms 마다 오는데 이걸 화면 전체
+    // setState 로 받으면 초당 4번씩 트랙 줄까지 다 다시 그린다(4단계에서 EQ 가
+    // 느렸던 것과 같은 병).
+    _PlayHead(
+      host: widget.host,
+      bars: _bars,
+      loopSec: _loopSec,
+      clicksPerBar: widget.project.meterDef.clicksPerBar,
+      onBars: _setSceneBars,
+    ),
+  ];
+
+  Widget _fillButton() => _DoodleFillButton(
+    project: widget.project,
+    transport: widget.transport,
+    host: widget.host,
+    onDone: _refresh,
+  );
+
+  Widget _trackList({required bool withFill}) => AnimatedBuilder(
+    animation: widget.project,
+    builder: (context, _) => ListView(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      children: [
+        // 트랙은 있는데 **패턴이 하나도 없으면 재생해도 무음**이다.
+        // 초보에게는 '고장' 으로 보인다 — 그 자리에서 알려 준다.
+        if (widget.project.tracks.isNotEmpty &&
+            widget.project.tracks.every((t) => t.pattern == null))
+          const _SilentHint(),
+        for (final t in widget.project.tracks)
+          _TrackRow(
+            key: ValueKey(t.id),
+            track: t,
+            project: widget.project,
+            transport: widget.transport,
+            host: widget.host,
+            simple: widget.simple,
+            pro: widget.pro,
+            onChanged: _refresh,
+          ),
+        _AddRow(
+          onAdd: (type, voice) => widget.project.addTrack(type, voice: voice),
+        ),
+        // 「두드려서 채우기」 — **이 씬의 바닥(드럼·베이스·화음)을
+        // 손으로 쳐서 깐다.** 홈 화면의 "두드려서 만들기"가 첫 씬을
+        // 만드는 입구라면, 이쪽은 **씬마다** 쓰는 입구다(사용자 결정,
+        // 2026-09-21: "씬마다 두들플레이로 만드는 거야").
+        if (withFill) ...[const SizedBox(height: 8), _fillButton()],
+      ],
+    ),
+  );
+
+  Widget _buildPortrait() {
     return Column(
       children: [
-        _Transport(
-          transport: widget.transport,
-          info: _info,
-          onPlay: _play,
-          onStop: _stop,
-        ),
-        _SceneBar(
-          project: widget.project,
-          transport: widget.transport,
-          host: widget.host,
-          loopSec: _loopSec,
-          bpm: widget.transport.bpm,
-          onLaunch: _launch,
-          onChanged: _refresh,
-          recording: _arr != null,
-          recCount: _arr?.count ?? 0,
-          onRecord: _toggleArrange,
-        ),
-        // 재생 위치 — **자기 위젯**이다. 지표가 250ms 마다 오는데 이걸 화면 전체
-        // setState 로 받으면 초당 4번씩 트랙 줄까지 다 다시 그린다(4단계에서 EQ 가
-        // 느렸던 것과 같은 병).
-        _PlayHead(
-          host: widget.host,
-          bars: _bars,
-          loopSec: _loopSec,
-          clicksPerBar: widget.project.meterDef.clicksPerBar,
-          onBars: _setSceneBars,
-        ),
-        Expanded(
-          child: AnimatedBuilder(
-            animation: widget.project,
-            builder: (context, _) => ListView(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-              children: [
-                // 트랙은 있는데 **패턴이 하나도 없으면 재생해도 무음**이다.
-                // 초보에게는 '고장' 으로 보인다 — 그 자리에서 알려 준다.
-                if (widget.project.tracks.isNotEmpty &&
-                    widget.project.tracks.every((t) => t.pattern == null))
-                  const _SilentHint(),
-                for (final t in widget.project.tracks)
-                  _TrackRow(
-                    key: ValueKey(t.id),
-                    track: t,
-                    project: widget.project,
-                    transport: widget.transport,
-                    host: widget.host,
-                    simple: widget.simple,
-                    pro: widget.pro,
-                    onChanged: _refresh,
-                  ),
-                _AddRow(
-                  onAdd: (type, voice) =>
-                      widget.project.addTrack(type, voice: voice),
-                ),
-                // 「두드려서 채우기」 — **이 씬의 바닥(드럼·베이스·화음)을
-                // 손으로 쳐서 깐다.** 홈 화면의 "두드려서 만들기"가 첫 씬을
-                // 만드는 입구라면, 이쪽은 **씬마다** 쓰는 입구다(사용자 결정,
-                // 2026-09-21: "씬마다 두들플레이로 만드는 거야").
-                const SizedBox(height: 8),
-                _DoodleFillButton(
-                  project: widget.project,
-                  transport: widget.transport,
-                  host: widget.host,
-                  onDone: _refresh,
-                ),
-              ],
-            ),
-          ),
-        ),
+        ..._controls(),
+        Expanded(child: _trackList(withFill: true)),
       ],
     );
   }
@@ -641,6 +684,9 @@ class _SceneBar extends StatelessWidget {
   final bool recording;
   final int recCount;
   final VoidCallback onRecord;
+
+  /// 가로 좌측 패널용 — 칩을 옆으로 스크롤하지 않고 여러 줄로 감아 씬이 다 보이게 한다.
+  final bool wrap;
   const _SceneBar({
     required this.project,
     required this.transport,
@@ -652,6 +698,7 @@ class _SceneBar extends StatelessWidget {
     required this.recording,
     required this.recCount,
     required this.onRecord,
+    this.wrap = false,
   });
 
   @override
@@ -660,174 +707,199 @@ class _SceneBar extends StatelessWidget {
       animation: project,
       builder: (context, _) => Container(
         // 52 − 위아래 5 = 칩 높이 42. 예전엔 46 − 5 = 36 이었다.
-        height: scaled(context, 52),
+        height: wrap ? null : scaled(context, 52),
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: const BoxDecoration(
           border: Border(bottom: BorderSide(color: Colors.white12)),
         ),
-        child: Row(
-          children: [
-            // **연주해서 곡 만들기.** 켜고 씬을 넘기면 그 순서가 구간표가 된다.
-            // 씬 줄 바로 옆이라야 뜻이 통한다 — 여기서 하는 일이 곧 그것이다.
-            // 리플이 칩 색 위로 보이게 색·둥근모서리를 Material 로 올린다
-            // (Container 채움 뒤에 리플을 그리면 가려진다). 치수는 그대로.
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: Material(
-                color: recording
-                    ? Colors.red.shade600
-                    : Colors.white.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(8),
-                clipBehavior: Clip.antiAlias,
-                child: InkWell(
-                  onTap: onRecord,
-                  child: Container(
-                    height: 34, // 손가락 바닥선
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    alignment: Alignment.center,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          recording ? Icons.stop : Icons.fiber_manual_record,
-                          size: 13,
-                          color: recording ? Colors.white : Colors.red.shade300,
+        child: _layout([
+          // **연주해서 곡 만들기.** 켜고 씬을 넘기면 그 순서가 구간표가 된다.
+          // 씬 줄 바로 옆이라야 뜻이 통한다 — 여기서 하는 일이 곧 그것이다.
+          // 리플이 칩 색 위로 보이게 색·둥근모서리를 Material 로 올린다
+          // (Container 채움 뒤에 리플을 그리면 가려진다). 치수는 그대로.
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Material(
+              color: recording
+                  ? Colors.red.shade600
+                  : Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: onRecord,
+                child: Container(
+                  height: 34, // 손가락 바닥선
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  alignment: Alignment.center,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        recording ? Icons.stop : Icons.fiber_manual_record,
+                        size: 13,
+                        color: recording ? Colors.white : Colors.red.shade300,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        recording ? '곡으로 ($recCount)' : '연주 녹음',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                          color: recording ? Colors.white : Colors.white54,
                         ),
-                        const SizedBox(width: 4),
-                        Text(
-                          recording ? '곡으로 ($recCount)' : '연주 녹음',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w800,
-                            color: recording ? Colors.white : Colors.white54,
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
-            Expanded(
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  for (var i = 0; i < project.scenes.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 5),
-                      // 칩 색·둥근모서리를 Material 로 올려 리플이 그 위에
-                      // 보이게 한다(Container 채움 뒤에 그리면 가려진다). 치수 그대로.
-                      child: Material(
-                        color: i == project.currentScene
-                            ? Colors.indigo.shade400
-                            : Colors.white10,
-                        borderRadius: BorderRadius.circular(8),
-                        clipBehavior: Clip.antiAlias,
-                        child: InkWell(
-                          onTap: () => onLaunch(i),
-                          onLongPress: () => _edit(context, i),
-                          child: Container(
-                            alignment: Alignment.center,
-                            padding: EdgeInsets.only(
-                              left: 12,
-                              right: i == project.currentScene ? 7 : 12,
-                            ),
-                            // 이름 바꾸기·복제·삭제가 **길게 누르기에만** 있었다.
-                            // 곡 목록에서 이미 겪은 것과 같은 문제다 —
-                            // 「있는 줄도 모르니 씬 이름이 전부 "씬 2" 로 남는다」.
-                            // 지금 씬에만 ⋮ 를 붙인다: 하나만 나오니 안 어지럽고,
-                            // **어느 씬에 대한 메뉴인지**도 그 자리에서 보인다.
-                            // 길게 누르기는 그대로 둔다(이미 익힌 사람이 있다).
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // **지금 씬만 춤춘다.** 다 움직이면 어느 것이
-                                // 소리 나는지 오히려 안 보이고, 씬 수만큼 시계가
-                                // 돈다(멈춘 것은 그릴 값이 안 바뀐다).
-                                if ((project.scenes[i].critter ?? '')
-                                    .isNotEmpty)
-                                  Padding(
-                                    padding: const EdgeInsets.only(right: 5),
-                                    child: i == project.currentScene
-                                        ? CritterBeat(
-                                            host: host,
-                                            loopSec: loopSec,
-                                            bpm: bpm,
-                                            value: project.scenes[i].critter!,
-                                            size: 26,
-                                            color: Colors.white,
-                                          )
-                                        : CritterIcon(
-                                            value: project.scenes[i].critter!,
-                                            size: 26,
-                                            color: Colors.white54,
-                                          ),
-                                  ),
-                                Text(
-                                  project.scenes[i].name,
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: i == project.currentScene
-                                        ? FontWeight.w800
-                                        : FontWeight.w400,
-                                    color: i == project.currentScene
-                                        ? Colors.white
-                                        : Colors.white60,
-                                  ),
-                                ),
-                                if (i == project.currentScene)
-                                  InkResponse(
-                                    onTap: () => _edit(context, i),
-                                    radius: 22,
-                                    // **18×15 였다.** 보이는 점 셋은 그대로 두고
-                                    // 눌리는 자리만 칩 높이만큼 넓힌다 — 이만한 것을
-                                    // 두 번 세 번 눌러야 하면 있으나 마나다.
-                                    child: const SizedBox(
-                                      width: 34,
-                                      height: double.infinity,
-                                      child: Icon(
-                                        Icons.more_vert,
-                                        size: 15,
-                                        color: Colors.white70,
-                                      ),
+          ),
+          _strip([
+            for (var i = 0; i < project.scenes.length; i++)
+              Padding(
+                padding: const EdgeInsets.only(right: 5),
+                // 칩 색·둥근모서리를 Material 로 올려 리플이 그 위에
+                // 보이게 한다(Container 채움 뒤에 그리면 가려진다). 치수 그대로.
+                child: Material(
+                  color: i == project.currentScene
+                      ? Colors.indigo.shade400
+                      : Colors.white10,
+                  borderRadius: BorderRadius.circular(8),
+                  clipBehavior: Clip.antiAlias,
+                  child: InkWell(
+                    onTap: () => onLaunch(i),
+                    onLongPress: () => _edit(context, i),
+                    child: Container(
+                      alignment: Alignment.center,
+                      padding: EdgeInsets.only(
+                        left: 12,
+                        right: i == project.currentScene ? 7 : 12,
+                      ),
+                      // 이름 바꾸기·복제·삭제가 **길게 누르기에만** 있었다.
+                      // 곡 목록에서 이미 겪은 것과 같은 문제다 —
+                      // 「있는 줄도 모르니 씬 이름이 전부 "씬 2" 로 남는다」.
+                      // 지금 씬에만 ⋮ 를 붙인다: 하나만 나오니 안 어지럽고,
+                      // **어느 씬에 대한 메뉴인지**도 그 자리에서 보인다.
+                      // 길게 누르기는 그대로 둔다(이미 익힌 사람이 있다).
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          // **지금 씬만 춤춘다.** 다 움직이면 어느 것이
+                          // 소리 나는지 오히려 안 보이고, 씬 수만큼 시계가
+                          // 돈다(멈춘 것은 그릴 값이 안 바뀐다).
+                          if ((project.scenes[i].critter ?? '').isNotEmpty)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 5),
+                              child: i == project.currentScene
+                                  ? CritterBeat(
+                                      host: host,
+                                      loopSec: loopSec,
+                                      bpm: bpm,
+                                      value: project.scenes[i].critter!,
+                                      size: 26,
+                                      color: Colors.white,
+                                    )
+                                  : CritterIcon(
+                                      value: project.scenes[i].critter!,
+                                      size: 26,
+                                      color: Colors.white54,
                                     ),
-                                  ),
-                              ],
+                            ),
+                          Flexible(
+                            child: Text(
+                              project.scenes[i].name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: i == project.currentScene
+                                    ? FontWeight.w800
+                                    : FontWeight.w400,
+                                color: i == project.currentScene
+                                    ? Colors.white
+                                    : Colors.white60,
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                    ),
-                  // ＋ 새 씬 — 리플이 보이게 Material+InkWell. 테두리만 있는
-                  // 칩이라 채움이 리플을 가리지 않는다. 치수 그대로.
-                  Material(
-                    color: Colors.transparent,
-                    borderRadius: BorderRadius.circular(8),
-                    clipBehavior: Clip.antiAlias,
-                    child: InkWell(
-                      onTap: project.addScene,
-                      child: Container(
-                        alignment: Alignment.center,
-                        padding: const EdgeInsets.symmetric(horizontal: 14),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.white24),
-                        ),
-                        child: const Text(
-                          '＋',
-                          style: TextStyle(fontSize: 14, color: Colors.white54),
-                        ),
+                          if (i == project.currentScene)
+                            InkResponse(
+                              onTap: () => _edit(context, i),
+                              radius: 22,
+                              // **18×15 였다.** 보이는 점 셋은 그대로 두고
+                              // 눌리는 자리만 칩 높이만큼 넓힌다 — 이만한 것을
+                              // 두 번 세 번 눌러야 하면 있으나 마나다.
+                              child: const SizedBox(
+                                width: 34,
+                                height: double.infinity,
+                                child: Icon(
+                                  Icons.more_vert,
+                                  size: 15,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),
-                ],
+                ),
+              ),
+            // ＋ 새 씬 — 리플이 보이게 Material+InkWell. 테두리만 있는
+            // 칩이라 채움이 리플을 가리지 않는다. 치수 그대로.
+            Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: project.addScene,
+                child: Container(
+                  alignment: Alignment.center,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: const Text(
+                    '＋',
+                    style: TextStyle(fontSize: 14, color: Colors.white54),
+                  ),
+                ),
               ),
             ),
-          ],
-        ),
+          ]),
+        ]),
       ),
     );
   }
+
+  /// 세로: 녹음 버튼 + 옆으로 스크롤하는 칩 줄(한 줄). 가로 패널: 녹음 버튼 아래 칩을 감는다.
+  Widget _layout(List<Widget> kids) => wrap
+      ? Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [kids.first, const SizedBox(height: 6), ...kids.skip(1)],
+        )
+      : Row(children: kids);
+
+  Widget _strip(List<Widget> chips) => wrap
+      ? LayoutBuilder(
+          builder: (context, cs) => Wrap(
+            runSpacing: 6,
+            children: [
+              for (final c in chips)
+                ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: cs.maxWidth,
+                    minHeight: 42,
+                    maxHeight: 42,
+                  ),
+                  child: c,
+                ),
+            ],
+          ),
+        )
+      : Expanded(
+          child: ListView(scrollDirection: Axis.horizontal, children: chips),
+        );
 
   void _edit(BuildContext context, int i) {
     showModalBottomSheet<void>(
