@@ -217,10 +217,16 @@ class _ModeBar extends StatelessWidget {
     // 탭이 아니다. 좁을 땐 곡 이름을 감추고, 탭 넷을 `Expanded` 로 똑같이
     // 나눠 늘 다 보이게 한다.
     final compact = MediaQuery.of(context).size.width < 600;
+    // 가로(2026-09-30): 높이가 귀하니 바를 65 → 47dp 로 얇게 — 누를 것은 그대로
+    // 44×44 를 지키고 위아래 여백만 걷는다. 세로는 예전 그대로.
+    final land = MediaQuery.of(context).orientation == Orientation.landscape;
+    const tight = BoxConstraints.tightFor(width: 44, height: 44);
+    const zero = EdgeInsets.zero;
+    final shrink = IconButton.styleFrom(tapTargetSize: MaterialTapTargetSize.shrinkWrap);
     return AnimatedBuilder(
       animation: project,
       builder: (context, _) => Container(
-        padding: const EdgeInsets.fromLTRB(6, 8, 10, 8),
+        padding: land ? const EdgeInsets.fromLTRB(4, 1, 6, 1) : const EdgeInsets.fromLTRB(6, 8, 10, 8),
         decoration: const BoxDecoration(
           color: Color(0xFF17181B),
           border: Border(bottom: BorderSide(color: Colors.white12)),
@@ -231,6 +237,9 @@ class _ModeBar extends StatelessWidget {
               tooltip: '첫 화면으로',
               onPressed: () => Navigator.of(context).maybePop(),
               icon: const Icon(Icons.arrow_back, size: 20),
+              constraints: land ? tight : null,
+              style: land ? shrink : null,
+              padding: land ? zero : null,
             ),
             if (!compact)
               // 가로에서는 이름이 탭과 남는 폭을 반씩 나눠 탭 글자가 "타…" 로 잘렸다.
@@ -268,10 +277,27 @@ class _ModeBar extends StatelessWidget {
               tooltip: '프로젝트 설정',
               onPressed: onSettings,
               icon: const Icon(Icons.settings_outlined, size: 20),
+              constraints: land ? tight : null,
+              style: land ? shrink : null,
+              padding: land ? zero : null,
             ),
             if (onMixer != null)
-              IconButton(tooltip: '믹서', onPressed: onMixer, icon: const Icon(Icons.tune, size: 20)),
-            IconButton(tooltip: '사용법', onPressed: onHelp, icon: const Icon(Icons.help_outline, size: 20)),
+              IconButton(
+                tooltip: '믹서',
+                onPressed: onMixer,
+                icon: const Icon(Icons.tune, size: 20),
+                constraints: land ? tight : null,
+              style: land ? shrink : null,
+                padding: land ? zero : null,
+              ),
+            IconButton(
+              tooltip: '사용법',
+              onPressed: onHelp,
+              icon: const Icon(Icons.help_outline, size: 20),
+              constraints: land ? tight : null,
+              style: land ? shrink : null,
+              padding: land ? zero : null,
+            ),
           ],
         ),
       ),

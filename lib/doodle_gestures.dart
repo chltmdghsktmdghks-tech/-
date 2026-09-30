@@ -53,12 +53,31 @@ const double kBassBoomAfterSec = 0.25;
 /// 같은 「꾹」이 롤이 되느냐 오픈이 되느냐는 **세로 자리**로 가른다(아래).
 const int kOpenHatAfterMs = 180;
 
-/// 이 세로 위치(0=위, 1=아래)보다 **아래**를 꾹 누르면 오픈 하이햇, 위쪽이면 16분 롤.
-/// (하이햇 롤 밀도 경계 `_kHatSparseFrac` 와 같은 값 — 아래 구역이 원래 「성긴」 자리였다.)
-const double kOpenHatZone = 0.6;
+/// 하이햇 세로 3구역의 경계(0=위, 1=아래). **위 = 16비트 · 가운데 = 8비트 · 아래 = 오픈.**
+/// 톡 치는 건 어디든 닫힌 하이햇이고, 「꾹」(180ms)이 되면 손이 닿은 구역이 뜻을 정한다:
+///  - 위(`< kHat16Zone`): 16분음표 롤(촘촘, 16비트)
+///  - 가운데: 8분음표 롤(성긴, 8비트)
+///  - 아래(`>= kOpenHatZone`): 열린 하이햇 한 번
+/// (예전엔 8분 구역과 오픈 구역이 같은 자리(0.6 아래)라 처음부터 8비트를 못 골랐다 —
+///  아래를 꾹 누르면 무조건 오픈이었다.)
+const double kHat16Zone = 0.40;
+const double kOpenHatZone = 0.72;
+
+/// 구역 경계 목록 — `stickyBand` 에 그대로 넘긴다.
+const List<double> kHatZoneEdges = [kHat16Zone, kOpenHatZone];
+
+/// 하이햇 구역 번호. [kHatBand16] · [kHatBand8] · [kHatBandOpen].
+const int kHatBand16 = 0, kHatBand8 = 1, kHatBandOpen = 2;
+
+/// 롤의 굵기(16분 칸 단위) — 16비트는 매 칸(1), 8비트는 두 칸마다(2).
+int hatRollUnit(int band) => band == kHatBand16 ? 1 : 2;
 
 /// 하이햇을 [frac](세로 0~1)에서 꾹 눌렀을 때 오픈인가.
 bool hatHoldOpens(double frac) => frac >= kOpenHatZone;
+
+/// [frac] 의 하이햇 구역. [prev] 가 있으면 경계에서 [slop] 안의 흔들림은 직전 구역에 머문다.
+int hatBandSticky(double frac, {int? prev, double slop = 0}) =>
+    stickyBand(frac, kHatZoneEdges, prev: prev, slop: slop);
 
 // ── 4. 스웰 ──
 
@@ -288,13 +307,12 @@ bool hatHoldOpensSticky({
   required double frac,
   double slop = 0,
 }) =>
-    stickyBand(
+    hatBandSticky(
       frac,
-      const [kOpenHatZone],
-      prev: downFrac >= kOpenHatZone ? 1 : 0,
+      prev: hatBandSticky(downFrac),
       slop: slop,
     ) ==
-    1;
+    kHatBandOpen;
 
 /// 스웰이 움직이기 시작하기 전 **무시하는 처음 거리**(픽셀) — 톡 칠 때 엄지가 구르는 만큼은 그은 게 아니다.
 const double kSwellDeadPx = 10;

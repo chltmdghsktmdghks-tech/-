@@ -311,6 +311,7 @@ void main() {
 
       final d = bars8();
       final before = d.length;
+      final origSig = {for (final e in d) '${e[1]}@${e[4]}'};
       final hatBefore = d.where((e) => e[1] == 'hat').length;
       applyFill(d, 'acoustic', _step, 4, 2, const FillSpec(amount: 0.6));
 
@@ -343,14 +344,22 @@ void main() {
       }).toList();
       final lanes = {for (final e in inWin) e[1] as String};
       check(
-        '6-b) 필 자리는 갈아엎는다',
-        !lanes.contains('hat') &&
+        '6-b) 필 자리에 하이햇은 남고 스네어/탐이 얹힌다',
+        lanes.contains('hat') &&
             (lanes.contains('snare') || lanes.contains('tom')),
-        '남은 것 ${lanes.join('·')} (하이햇 없음 · 스네어/탐 있음)',
+        '있는 것 ${lanes.join('·')} (하이햇 유지 · 스네어/탐 있음)',
       );
 
       // **킥은 남는다** — 발이라 필 중에도 계속 밟는다
       check('6-c) 킥은 남는다', lanes.contains('kick'), '');
+
+      // 원래 있던 타격(하이햇·라이드·킥·스네어 전부)은 하나도 사라지지 않는다
+      final afterSig = {for (final e in d) '${e[1]}@${e[4]}'};
+      check(
+        '6-j) 녹음한 타격은 전부 남는다',
+        origSig.every(afterSig.contains),
+        '원래 ${origSig.length}개 중 ${origSig.where(afterSig.contains).length}개 남음',
+      );
 
       // 세기가 **올라가며** 밀어 준다
       final vels = [
@@ -363,11 +372,11 @@ void main() {
         vels.join('·'),
       );
 
-      // 하이햇 총수는 줄고, 타격 총수는 늘어난다(필이 더 촘촘하다)
+      // 녹음한 하이햇은 한 개도 안 줄고, 타격 총수는 늘어난다
       final hatAfter = d.where((e) => e[1] == 'hat').length;
       check(
-        '6-e) 하이햇은 걷히고 타격은 는다',
-        hatAfter < hatBefore && d.length > before,
+        '6-e) 하이햇 수는 그대로, 타격은 는다',
+        hatAfter == hatBefore && d.length > before,
         '하이햇 $hatBefore→$hatAfter · 타격 $before→${d.length}',
       );
 

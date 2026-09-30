@@ -565,7 +565,10 @@ class _Transport extends StatelessWidget {
       animation: transport,
       builder: (context, _) {
         return Container(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          // 가로(2026-09-30): 탭 바 바로 아래라 위아래 여백을 8 → 3 으로.
+          padding: MediaQuery.orientationOf(context) == Orientation.landscape
+              ? const EdgeInsets.fromLTRB(10, 3, 10, 3)
+              : const EdgeInsets.fromLTRB(10, 8, 10, 8),
           decoration: const BoxDecoration(
             border: Border(bottom: BorderSide(color: Colors.white12)),
           ),

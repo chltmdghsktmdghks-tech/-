@@ -112,6 +112,7 @@ void main() {
     test('오픈 하이햇 — 아래 구역만, 스웰 — 아래에서 닿아야 걸리고 위로 그을수록 큰 값', () {
       expect(hatHoldOpens(0.9), isTrue);
       expect(hatHoldOpens(0.3), isFalse);
+      expect(hatHoldOpens(0.55), isFalse, reason: '가운데는 8비트 롤 구역');
       expect(swellStartsAt(0.9), isTrue);
       expect(swellStartsAt(0.4), isFalse);
       expect(swellLevel(800, 800, 600), kSwellStart);
@@ -348,6 +349,53 @@ void main() {
             .where((h) => (h as List)[1] == 'hat'),
         isNotEmpty,
         reason: '위에서 꾹은 16비트 롤',
+      );
+      await g.up();
+    });
+
+    testWidgets('하이햇 8비트 vs 16비트: 위 = 촘촘(16분), 가운데 = 성긴(8분), 격자에 정렬', (tester) async {
+      final (host, _) = await _open(tester);
+      await tester.tap(find.text('HI-HAT').first);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // 손가락을 [y] 에 두고 [ms] 동안 눌러 롤이 낸 닫힌 하이햇 수를 센다.
+      Future<int> rollHits(double y) async {
+        host.looping();
+        host.calls.clear();
+        final g = await tester.startGesture(Offset(200, y));
+        await tester.pump();
+        for (var i = 0; i < 12; i++) {
+          await _hold(tester, 150);
+        }
+        await g.up();
+        return host
+            .of('drumBatch')
+            .expand((c) => c.$2[0] as List)
+            .where((h) => (h as List)[1] == 'hat')
+            .length;
+      }
+
+      final n16 = await rollHits(150); // 위 (frac ≈ 0.17)
+      final n8 = await rollHits(500); // 가운데 (frac ≈ 0.55)
+      expect(n16, greaterThan(0));
+      expect(n8, greaterThan(0));
+      expect(n16, greaterThan(n8 * 1.5),
+          reason: '16비트는 8비트의 약 2배 촘촘 (16비트 $n16 vs 8비트 $n8)');
+      expect(n16, lessThan(n8 * 2.6), reason: '너무 촘촘해도 안 된다(32분 아님)');
+
+      // 가운데 구역을 꾹 눌러도 오픈이 아니다(예전엔 0.6 아래는 무조건 오픈이었다).
+      host.looping();
+      host.calls.clear();
+      final g = await tester.startGesture(const Offset(200, 500));
+      await tester.pump();
+      await _hold(tester, 320);
+      await _hold(tester, 150);
+      expect(
+        host.of('drumBatch').any(
+          (c) => (c.$2[0] as List).any((h) => (h as List)[1] == 'hatopen'),
+        ),
+        isFalse,
+        reason: '가운데는 8비트 롤',
       );
       await g.up();
     });

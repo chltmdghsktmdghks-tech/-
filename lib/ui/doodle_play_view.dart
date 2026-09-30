@@ -210,8 +210,9 @@ class _Finger {
   /// 코드: 이 탭이 정한 진행 방향(−1·0·+1)과 색(1=위 화려·0=아래 담백) — 화면 표시용.
   int dir = 0, color = 0;
 
-  /// 하이햇 롤이 지금 8분(성긴)인가 — 바뀌는 순간에만 손끝으로 알리려고 든다.
-  bool? hatSparse;
+  /// 하이햇 지금 구역(`kHatBand16`·`kHatBand8`·`kHatBandOpen`) — 경계에서 흔들려도 안 튀게
+  /// 직전 구역을 기억하고, 바뀌는 순간에만 손끝으로 알린다. null 이면 아직 안 읽었다.
+  int? hatBand;
 
   /// 지금 머무는 좌우 구역(0~3). 넘어가면 미끄러뜨리기다.
   int zone;
@@ -1403,10 +1404,16 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
   /// 킥에서 이 세로 위치(0=위, 1=아래)보다 아래를 치면 **고스트**(여리게).
   static const double _kGhostFrac = 0.68;
 
-  /// 하이햇 롤에서 이 세로 위치보다 아래를 누르고 있으면 **8분**(성긴 비트),
-  /// 위쪽이면 **16분**(촘촘). 롤 도중 위로 밀면 16분으로 올라간다(필인).
+  /// 하이햇 세로 3구역(`kHat16Zone`·`kOpenHatZone`, doodle_gestures.dart): 위 = 16비트 롤,
+  /// 가운데 = 8비트 롤, 아래 = 오픈. 롤 도중 위로 밀면 16분으로 올라간다(필인).
   /// 32분·셋잇단은 못 넣는다 — 드럼 판이 16분 칸 격자라 저장이 안 된다(친 소리 = 적힌 음).
-  static const double _kHatSparseFrac = 0.6;
+
+  /// 이 손가락의 하이햇 구역 — 경계 되돌림 포함(읽기 전용, 상태는 `_tickRoll`·`_pressMove` 가 갱신).
+  int _hatBandOf(_Finger f) => hatBandSticky(
+    f.frac,
+    prev: f.hatBand ?? hatBandSticky(f.downFrac),
+    slop: _area.height <= 0 ? 0 : kBandSlopPx / _area.height,
+  );
 
   /// **베이스 전용 세기 — 가로(x)로 읽는다.**
   ///
@@ -2020,20 +2027,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       if (lane == 'hat') {
         // 하이햇은 **지금 손가락의 세로 위치**가 밀도다(롤 도중 위로 밀면 촘촘해진다).
         // 8분↔16분 경계도 되돌림이 있다 — 처음엔 닿은 자리, 그 뒤엔 직전 밀도를 기억한다.
-        final sparse = stickyBand(
-              f.frac,
-              const [_kHatSparseFrac],
-              prev: f.hatSparse == null
-                  ? (f.downFrac >= _kHatSparseFrac ? 1 : 0)
-                  : (f.hatSparse! ? 1 : 0),
-              slop: _area.height <= 0 ? 0 : kBandSlopPx / _area.height,
-            ) ==
-            1;
-        if (f.hatSparse != null && f.hatSparse != sparse) {
+        // 롤이 이미 돌기 시작한 뒤 오픈 구역까지 내려가도 오픈으로 바꾸지 않고 8비트로 둔다.
+        var band = _hatBandOf(f);
+        if (band == kHatBandOpen) band = kHatBand8;
+        if (f.hatBand != null && f.hatBand != band) {
           HapticFeedback.selectionClick(); // 밀도가 바뀐 순간만 한 번
         }
-        f.hatSparse = sparse;
-        unit = sparse ? 2 : 1;
+        f.hatBand = band;
+        unit = hatRollUnit(band);
       } else {
         unit = _rollUnit(f.vel);
       }
@@ -3314,7 +3315,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       _canRoll
           ? (_stageDef.drumLane == 'hat'
                 ? '오른쪽일수록 세게 · 톡 치면 닫힌 하이햇\n'
-                      '아래에서 꾹 누르면(0.18초) 열린 하이햇 · 위에서 꾹 누르면 16비트 롤 — 롤 중 오른쪽으로 밀면 점점 세져요'
+                      '꾹 누르면(0.18초) 자리가 모드 — 위 16비트 롤 · 가운데 8비트 롤 · 아래 열린 하이햇 · 롤 중 위로 밀면 촘촘, 오른쪽으로 밀면 세져요'
                 : '아무 데나 쳐도 됩니다 · 한가운데가 세게, 가장자리가 여리게\n'
                       '꾹 누르면 굴러갑니다 · 세게 누르면 16분, 여리게 누르면 8분으로 · 롤 중 오른쪽으로 밀면 점점 세져요')
           : '위쪽은 정타, 아래쪽은 고스트(여린 킥) · 오른쪽일수록 세게\n'
@@ -3331,40 +3332,51 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
           '\n한 마디만 쳐 두면 안 친 뒷마디에 그 리듬이 이어져요',
   };
 
-  /// 킥·하이햇의 **세로 구역**을 옅게 깐다 — 킥: 아래 = 고스트. 하이햇: 아래 = 8분(성긴),
-  /// 위 = 16분(촘촘, 롤 중 위로 밀면 필인). 경계는 `_kGhostFrac`·`_kHatSparseFrac` 와 같다.
+  /// 킥·하이햇의 **세로 구역**을 옅게 깐다 — 킥: 아래 = 고스트.
+  /// 하이햇: 위 = 16비트 롤 · 가운데 = 8비트 롤 · 아래 = 오픈(경계는 `kHat16Zone`·`kOpenHatZone`).
+  /// 손가락이 닿아 있는 구역은 밝게 켜지고 글자도 또렷해진다(지금 어느 모드인지 즉시 보이게).
   Widget _drumZones(Size area) {
     final kick = _stageDef.drumLane == 'kick';
-    final edge = kick ? _kGhostFrac : _kHatSparseFrac;
-    final live = _fingers.values.map((f) => f.frac).toList();
-    final lowOn = live.any((y) => y >= edge);
-    final highOn = live.any((y) => y < edge);
     Widget zone(double flex, String label, bool on, {bool top = false}) => Expanded(
-      flex: (flex * 100).round(),
+      flex: (flex * 1000).round(),
       child: Container(
         alignment: top ? Alignment.topCenter : Alignment.bottomCenter,
         padding: const EdgeInsets.symmetric(vertical: 8),
         decoration: BoxDecoration(
-          color: _stageColor().withValues(alpha: on ? 0.10 : 0.03),
+          color: _stageColor().withValues(alpha: on ? 0.16 : 0.03),
           border: top
               ? null
               : Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.07))),
         ),
         child: Text(
           label,
+          textAlign: TextAlign.center,
           style: TextStyle(
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            color: Colors.white.withValues(alpha: 0.20),
+            fontSize: on ? 13 : 11,
+            fontWeight: FontWeight.w800,
+            color: Colors.white.withValues(alpha: on ? 0.75 : 0.20),
           ),
         ),
       ),
     );
+    if (kick) {
+      final live = _fingers.values.map((f) => f.frac).toList();
+      return IgnorePointer(
+        child: Column(
+          children: [
+            zone(_kGhostFrac, '정타 · 오른쪽일수록 세게', live.any((y) => y < _kGhostFrac), top: true),
+            zone(1 - _kGhostFrac, '고스트', live.any((y) => y >= _kGhostFrac)),
+          ],
+        ),
+      );
+    }
+    final bands = _fingers.values.map(_hatBandOf).toList();
     return IgnorePointer(
       child: Column(
         children: [
-          zone(edge, kick ? '정타 · 오른쪽일수록 세게' : '16비트 · 위로 밀면 촘촘', highOn, top: true),
-          zone(1 - edge, kick ? '고스트' : '8비트', lowOn),
+          zone(kHat16Zone, '16비트 · 꾹 누르면 촘촘한 롤', bands.contains(kHatBand16), top: true),
+          zone(kOpenHatZone - kHat16Zone, '8비트 · 꾹 누르면 성긴 롤', bands.contains(kHatBand8)),
+          zone(1 - kOpenHatZone, 'OPEN · 꾹 누르면 열린 하이햇', bands.contains(kHatBandOpen)),
         ],
       ),
     );
@@ -4185,20 +4197,10 @@ class _HitFxPainter extends CustomPainter {
         3 + 2 * charge,
         Paint()..color = _alpha(Colors.white, 0.9),
       );
-      if (opens && charge > 0.4) {
-        final tp = TextPainter(
-          text: TextSpan(
-            text: 'OPEN',
-            style: TextStyle(
-              color: _alpha(Colors.white, 0.4 + 0.5 * charge),
-              fontSize: 11,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.5,
-            ),
-          ),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(c, Offset(origin.dx - tp.width / 2, origin.dy + 44));
+      // 하이햇은 꾹 누르는 동안 **지금 손 밑이 무슨 모드인지**(16비트·8비트·OPEN)를 바로 적는다 —
+      // 롤이 돌기 전(충전 중)에 이미 어느 쪽인지 보여야 손을 옮길 수 있다.
+      if (s._stageDef.drumLane == 'hat' && charge > 0.15) {
+        _hatModeLabel(c, origin, s._hatBandOf(f), 0.5 + 0.5 * charge);
       }
     }
     // 롤이 도는 동안 — 격자(박)마다 손가락 밑이 깜빡이고, 밀어서 세지는 눈금이 뜬다.
@@ -4220,7 +4222,32 @@ class _HitFxPainter extends CustomPainter {
         }
       }
       _crescendo(c, size, f, base);
+      if (s._stageDef.drumLane == 'hat') {
+        _hatModeLabel(c, origin, f.hatBand ?? s._hatBandOf(f), 0.9);
+      }
     }
+  }
+
+  /// 하이햇 모드 글자 — 손가락 밑에 「16비트」·「8비트」·「OPEN」.
+  void _hatModeLabel(Canvas c, Offset origin, int band, double a) {
+    final text = switch (band) {
+      kHatBand16 => '16비트',
+      kHatBand8 => '8비트',
+      _ => 'OPEN',
+    };
+    final tp = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: _alpha(Colors.white, a),
+          fontSize: 12,
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.2,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(c, Offset(origin.dx - tp.width / 2, origin.dy + 44));
   }
 
   /// 롤 크레셴도 눈금 — 손가락에서 오른쪽으로 폭의 1/4·2/4 자리에 점 둘. 지나간 만큼 켜진다.

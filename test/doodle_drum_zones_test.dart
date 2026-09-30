@@ -28,12 +28,13 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('하이햇: 아래 8비트 / 위 16비트 구역이 보인다', (tester) async {
+  testWidgets('하이햇: 위 16비트 / 가운데 8비트 / 아래 OPEN 3구역이 보인다', (tester) async {
     await _open(tester);
     await tester.tap(find.text('HI-HAT').first);
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.text('8비트'), findsOneWidget);
-    expect(find.textContaining('16비트'), findsWidgets);
+    expect(find.textContaining('8비트 ·'), findsOneWidget);
+    expect(find.textContaining('16비트 ·'), findsOneWidget);
+    expect(find.textContaining('OPEN ·'), findsOneWidget);
     final g = await tester.startGesture(const Offset(200, 700));
     await tester.pump();
     await g.moveBy(const Offset(0, -400)); // 롤 중 위로 밀기

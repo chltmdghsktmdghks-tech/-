@@ -43,8 +43,9 @@ void main() {
     }
 
     const names = ['신남', '빽빽', '스윙', '필', '변화'];
-    // 「필」은 원래 작게 나온다 — 네 바퀴 중 한 마디만 건드린다.
-    const floors = [1.0, 1.0, 1.0, 0.5, 1.0];
+    // 「필」은 원래 작게 나온다 — 네 바퀴 중 한 마디만 건드린다. 게다가 녹음한 타격을
+    // 지우지 않고 얹기만 하므로(2026-09-30) 하이햇이 촘촘한 장르(house 0.2%)는 더 작다.
+    const floors = [1.0, 1.0, 1.0, 0.1, 1.0];
     final dead = <String>[];
     final worst = List<double>.filled(5, 999);
     final worstAt = List<String>.filled(5, '');

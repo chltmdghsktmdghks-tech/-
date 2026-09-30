@@ -40,7 +40,7 @@ class FillSpec {
 /// 마지막 마디의 **마지막 한 박**을 필로 바꾼다.
 ///
 /// 하는 일 셋:
-///  1. 그 자리의 하이햇·라이드를 걷어낸다 — 필과 겹치면 지저분하다
+///  1. 녹음한 것은 **하나도 지우지 않는다** — 하이햇·라이드도 그대로, 필은 얹기만
 ///  2. 스네어·탐을 16분으로 깔되 **세기를 점점 올린다**(밀어 올리는 느낌)
 ///  3. 바로 다음 마디 첫 박에 **크래시** — 매듭이 지어졌다는 신호
 ///
@@ -127,18 +127,14 @@ void applyFill(
     final fillStart = barStart + (stepsPerBar - fillSteps) * stepSec;
     final fillEnd = barStart + barSec;
 
-    // ① **필 자리는 갈아엎는다.**
+    // ① **녹음한 것은 하나도 지우지 않는다. 필은 더하기만 한다.**
     //
-    // 잔가지(하이햇·라이드·셰이커)만 걷어내려 했는데, 재 보니 패턴이 **이미
-    // 자기 필을 갖고 있는 경우가 많았다**(로파이 코러스는 마지막 마디에
-    // 스네어 3연타가 들어 있다). 그 위에 또 깔면 타격이 겹쳐 지저분해진다.
-    //
-    // 킥만 남긴다 — 킥은 발이라 필 중에도 계속 밟는다(실제 드러머가 그렇다).
-    drums.removeWhere((d) {
-      final t = (d[4] as num).toDouble();
-      if (t < fillStart - 1e-9 || t >= fillEnd - 1e-9) return false;
-      return d[1] != 'kick';
-    });
+    // 예전엔 이 자리의 하이햇·라이드를 걷어냈지만, 사용자가 친 하이햇이
+    // 필 때문에 바뀌면 안 된다(「필인만 넣어야지 왜 하이햇을 바꾸냐」).
+    // 판이 이미 갖고 있는 타격은 그대로 두고, 필 타격만 얹는다.
+    bool hasHit(String lane, double t) => drums.any(
+      (d) => d[1] == lane && ((d[4] as num).toDouble() - t).abs() < 1e-6,
+    );
 
     // ② 스네어·탐을 16분으로 깔며 세기를 올린다.
     //    **탐으로 내려가며 끝낸다** — 실제 드러머가 필 끝에서 하는 것이다.
@@ -150,6 +146,8 @@ void applyFill(
       // 앞쪽은 굴리고, 뒤쪽은 떨어뜨린다 — 음정이 내려가며 다음 마디로 간다
       final lane = k < 0.5 ? rollLane : dropLane;
       final tomF = 200.0 - k * 70; // 탐이 점점 낮아진다
+      // 같은 악기가 같은 자리에 이미 있으면(사용자가 친 것) 겹쳐 쌓지 않는다
+      if (hasHit(lane, t)) continue;
       drums.add([kitForLane?.call(lane) ?? kit, lane, vel, tomF, t]);
     }
 

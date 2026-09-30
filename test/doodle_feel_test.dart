@@ -435,16 +435,35 @@ void main() {
       expect(rollVelOfBump(1, 0), 1);
     });
 
-    test('하이햇 오픈/롤 경계 — 처음 닿은 자리를 기억(롤하려다 살짝 내려와도 오픈 안 됨)', () {
+    test('하이햇 3구역 — 위 16비트 · 가운데 8비트 · 아래 오픈, 경계에서 흔들려도 안 튄다', () {
       const slop = 14 / 600; // 화면 높이 600px
-      // 위쪽(롤)에서 시작 → 경계 .6 을 slop 만큼 넘어야 오픈
-      expect(hatHoldOpensSticky(downFrac: 0.4, frac: 0.61, slop: slop), isFalse);
-      expect(hatHoldOpensSticky(downFrac: 0.4, frac: 0.70, slop: slop), isTrue);
-      // 아래쪽(오픈)에서 시작 → 살짝 올라와도 오픈 유지
-      expect(hatHoldOpensSticky(downFrac: 0.8, frac: 0.59, slop: slop), isTrue);
-      expect(hatHoldOpensSticky(downFrac: 0.8, frac: 0.50, slop: slop), isFalse);
+      // 상수 관계: 위 < 가운데 < 아래, 8비트 구역이 손가락 하나 너비(≈14%)보다 넉넉히 넓다
+      expect(kHat16Zone, lessThan(kOpenHatZone));
+      expect(kOpenHatZone - kHat16Zone, greaterThan(0.25));
+      // 자리 → 구역 (기억 없음)
+      expect(hatBandSticky(0.10), kHatBand16);
+      expect(hatBandSticky(0.55), kHatBand8);
+      expect(hatBandSticky(0.90), kHatBandOpen);
+      expect(hatRollUnit(kHatBand16), 1, reason: '16비트 = 매 16분 칸');
+      expect(hatRollUnit(kHatBand8), 2, reason: '8비트 = 두 칸마다');
+      // 16 ↔ 8 경계(kHat16Zone) 흔들림
+      expect(hatBandSticky(kHat16Zone + 0.01, prev: kHatBand16, slop: slop), kHatBand16);
+      expect(hatBandSticky(kHat16Zone + 0.06, prev: kHatBand16, slop: slop), kHatBand8);
+      expect(hatBandSticky(kHat16Zone - 0.01, prev: kHatBand8, slop: slop), kHatBand8);
+      expect(hatBandSticky(kHat16Zone - 0.06, prev: kHatBand8, slop: slop), kHatBand16);
+      // 8 ↔ 오픈 경계 흔들림
+      expect(hatBandSticky(kOpenHatZone + 0.01, prev: kHatBand8, slop: slop), kHatBand8);
+      expect(hatBandSticky(kOpenHatZone + 0.06, prev: kHatBand8, slop: slop), kHatBandOpen);
+      // 오픈 판정 — 처음 닿은 자리를 기억(롤하려다 살짝 내려와도 오픈 안 됨)
+      expect(hatHoldOpensSticky(downFrac: 0.5, frac: kOpenHatZone + 0.01, slop: slop), isFalse);
+      expect(hatHoldOpensSticky(downFrac: 0.5, frac: 0.85, slop: slop), isTrue);
+      expect(hatHoldOpensSticky(downFrac: 0.85, frac: kOpenHatZone - 0.01, slop: slop), isTrue);
+      expect(hatHoldOpensSticky(downFrac: 0.85, frac: 0.50, slop: slop), isFalse);
+      // 위(16비트)에서 시작해 가운데를 스쳐도 오픈이 아니다
+      expect(hatHoldOpensSticky(downFrac: 0.2, frac: 0.55, slop: slop), isFalse);
       // 기억 없는 옛 함수와 slop 0 은 같다
       expect(hatHoldOpensSticky(downFrac: 0.4, frac: 0.61), hatHoldOpens(0.61));
+      expect(hatHoldOpensSticky(downFrac: 0.4, frac: 0.80), hatHoldOpens(0.80));
     });
 
     test('스웰 데드존 — 처음 kSwellDeadPx 는 그은 게 아니다, 끝(가득)은 그대로', () {

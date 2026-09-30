@@ -42,8 +42,8 @@ List<DoodleCoachTip> doodleCoachTips(
     case 'hat':
       return const [
         DoodleCoachTip('↔', '오른쪽일수록 세게, 톡 치면 닫힌 하이햇'),
-        DoodleCoachTip('◔', '아래에서 꾹 누르면 열린 하이햇, 위에서 꾹은 16비트 롤'),
-        DoodleCoachTip('→', '롤 도중 위로 밀면 촘촘하게, 오른쪽으로 밀면 세게'),
+        DoodleCoachTip('◔', '꾹 누르면 자리가 모드 — 위 16비트(촘촘) · 가운데 8비트(성긴) · 아래 열린 하이햇'),
+        DoodleCoachTip('→', '롤 도중 위로 밀면 16비트로 촘촘하게, 오른쪽으로 밀면 세게'),
       ];
     case 'chord':
       return [

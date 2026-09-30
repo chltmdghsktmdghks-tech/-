@@ -788,8 +788,8 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: EdgeInsets.fromLTRB(14, land ? 6 : 10, 14, 0),
-      padding: EdgeInsets.symmetric(horizontal: 16, vertical: land ? 2 : 10),
+      margin: EdgeInsets.fromLTRB(14, land ? 3 : 10, 14, 0),
+      padding: EdgeInsets.symmetric(horizontal: land ? 12 : 16, vertical: land ? 0 : 10),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(14),
@@ -831,7 +831,7 @@ class _TopBar extends StatelessWidget {
             style: TextButton.styleFrom(
               foregroundColor: Colors.white54,
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 40),
+              minimumSize: Size(0, land ? 44 : 40),
               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
             ),
             child: Text(
@@ -844,11 +844,17 @@ class _TopBar extends StatelessWidget {
               tooltip: '설정',
               onPressed: onSettings,
               icon: const Icon(Icons.settings_outlined),
+              constraints: land ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
+              style: land ? IconButton.styleFrom(tapTargetSize: MaterialTapTargetSize.shrinkWrap) : null,
+              padding: land ? EdgeInsets.zero : null,
             ),
           IconButton(
             tooltip: '사용법',
             onPressed: onHelp,
             icon: const Icon(Icons.help_outline),
+            constraints: land ? const BoxConstraints.tightFor(width: 44, height: 44) : null,
+              style: land ? IconButton.styleFrom(tapTargetSize: MaterialTapTargetSize.shrinkWrap) : null,
+            padding: land ? EdgeInsets.zero : null,
           ),
         ],
       ),
