@@ -577,4 +577,57 @@ void main() {
       await g.up();
     });
   });
+
+  group('F. 레이아웃 회귀 — 중앙 안내 글자가 세로 기둥이 되지 않는다', () {
+    // 2026-09-30 회귀: 첫 안내 카드가 안 뜰 때 `SizedBox.shrink()` 가 Stack 의 「위치 없는 자식」이라
+    // Stack 폭이 0 이 되어 KICK·TAP·REC·힌트가 한 글자씩 세로로 쌓였다.
+    Future<void> check(WidgetTester tester, {required bool coach}) async {
+      tester.view.physicalSize = const Size(1080, 2340);
+      tester.view.devicePixelRatio = 2.6;
+      addTearDown(tester.view.reset);
+      if (!coach) {
+        for (final k in kDoodleCoachKeys) {
+          DoodleHints.markSeen(k);
+        }
+      }
+      final h = _Host();
+      await tester.pumpWidget(MaterialApp(
+        theme: ThemeData.dark(),
+        home: DoodlePlayView(
+          project: Project.initial(),
+          transport: Transport(),
+          host: h as AudioClient,
+          initialBars: 4,
+        ),
+      ));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('이 순서로 시작'));
+      // 대기 → 미리 세기 → REC 까지 루프를 흘린다.
+      for (var i = 0; i < 40; i++) {
+        h.looping(0.05 + i * 0.02);
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(tester.takeException(), isNull, reason: 'overflow 등 예외 없음');
+      if (!coach) expect(find.byKey(const ValueKey('doodle-coach')), findsNothing);
+      final area = tester.getRect(find.byKey(const ValueKey('doodle-fx')));
+      expect(area.width, greaterThan(300), reason: '치는 자리 폭이 살아 있다');
+      // 중앙 글자 전부 — 폭이 정상이고(한 글자 폭이 아니고) 줄이 세로로 쌓이지 않는다.
+      for (final s in ['TAP', 'REC', 'KICK', '고스트']) {
+        for (final e in find.text(s).evaluate()) {
+          final sz = (e.renderObject as RenderBox).size;
+          expect(sz.width, greaterThan(sz.height * 0.8), reason: '$s 가 세로 기둥: $sz');
+        }
+      }
+      for (final e in find.byType(Text).evaluate()) {
+        final d = (e.widget as Text).data ?? '';
+        final sz = (e.renderObject as RenderBox).size;
+        if (d.length > 3 && sz.height > 0) {
+          expect(sz.width, greaterThan(20), reason: '"$d" 폭이 너무 좁다: $sz');
+        }
+      }
+    }
+
+    testWidgets('안내 카드가 뜬 채', (tester) async => check(tester, coach: true));
+    testWidgets('안내 카드가 없을 때(본 뒤) — 회귀 재현 조건', (tester) async => check(tester, coach: false));
+  });
 }

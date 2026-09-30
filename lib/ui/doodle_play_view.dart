@@ -3048,7 +3048,10 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
               final area = Size(box.maxWidth, box.maxHeight);
               // 첫 안내 카드는 **Listener 밖**에 얹는다 — 안에 두면 카드의 「알겠어요」 를 누를 때도
               // 드럼이 울린다. 카드 본문은 터치를 통과시키고(치는 자리를 안 가린다) 버튼만 받는다.
+              // `StackFit.expand` 필수: 카드가 안 뜰 때 `SizedBox.shrink()`(위치 없는 자식)가 들어오면
+              // Stack 이 그 크기(폭 0)로 줄어들어 안의 글자가 세로 기둥이 된다(2026-09-30 회귀).
               return Stack(
+                fit: StackFit.expand,
                 children: [
                   Positioned.fill(
                     child: Listener(
