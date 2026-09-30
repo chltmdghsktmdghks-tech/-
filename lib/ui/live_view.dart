@@ -31,6 +31,7 @@ import '../project.dart';
 import '../patterns.dart';
 import '../sequencer.dart';
 import '../theory.dart';
+import 'design.dart' show isShortLandscape;
 import 'play_head.dart';
 
 /// 음 길이 — 라벨 · 초 · **녹음에 남길 칸 수**(16분음표 몇 칸).
@@ -651,6 +652,50 @@ class _LiveViewState extends State<LiveView> {
     final wide = MediaQuery.of(context).size.height < 520;
     final rec = _rec;
 
+    // 가로(폰) 좌우 2단인가 — 폭이 충분하고 높이가 모자랄 때만. 세로는 예전 그대로다.
+    final side = isShortLandscape(context) && MediaQuery.sizeOf(context).width >= 600;
+    final topBar = _TopBar(
+      playing: playing,
+      onPlay: _togglePlay,
+      recording: _rec != null,
+      recCount: _rec?.count ?? 0,
+      onRec: _toggleRec,
+    );
+    Widget controlRow(bool w) => _ControlRow(
+      voice: widget.live.voice,
+      met: _met,
+      onMet: _toggleMet,
+      favs: _favs.where((v) => v != widget.live.voice).toList(),
+      onFav: _useVoice,
+      onVoice: () async {
+        final picked = await pickVoiceSheet(
+          context,
+          widget.live.voice,
+          // 소리 장치가 없으면 미리듣기를 안 준다 — 그러면 예전처럼
+          // 한 번에 고른다(시험도 이 길로 돈다).
+          onPreview: host == null ? null : _previewVoice,
+        );
+        if (picked == null) return;
+        _useVoice(picked);
+      },
+      mode: _mode,
+      onMode: (m) => setState(() => _mode = m),
+      oct: _oct,
+      onOct: (d) => setState(() => _oct = (_oct + d).clamp(-1, 2)),
+      wide: w,
+      side: side,
+      chromatic: _chromatic,
+      onChromatic: _toggleChromatic,
+    );
+    Widget knobs(bool w) => _LiveKnobs(
+      wide: w,
+      live: widget.live,
+      onChanged: () {
+        host?.setBus('live', vol: widget.live.vol, rev: widget.live.rev);
+        setState(() {});
+      },
+    );
+
     // **친 것을 말없이 버리지 않는다.**
     //
     // 「담기 N」이 떠 있는데 뒤로가기(← 나 안드로이드 뒤로)를 누르면 여태는 화면과
@@ -668,160 +713,147 @@ class _LiveViewState extends State<LiveView> {
         _toggleRec(); // 담는 길은 하나만 둔다 — 스낵바까지 제자리에서 뜬다
         if (mounted) Navigator.of(context).pop();
       },
-      child: Column(
-        children: [
-          _TopBar(
-            playing: playing,
-            onPlay: _togglePlay,
-            recording: _rec != null,
-            recCount: _rec?.count ?? 0,
-            onRec: _toggleRec,
-          ),
-          _ControlRow(
-            voice: widget.live.voice,
-            met: _met,
-            onMet: _toggleMet,
-            favs: _favs.where((v) => v != widget.live.voice).toList(),
-            onFav: _useVoice,
-            onVoice: () async {
-              final picked = await pickVoiceSheet(
-                context,
-                widget.live.voice,
-                // 소리 장치가 없으면 미리듣기를 안 준다 — 그러면 예전처럼
-                // 한 번에 고른다(시험도 이 길로 돈다).
-                onPreview: host == null ? null : _previewVoice,
-              );
-              if (picked == null) return;
-              _useVoice(picked);
-            },
-            mode: _mode,
-            onMode: (m) => setState(() => _mode = m),
-            oct: _oct,
-            onOct: (d) => setState(() => _oct = (_oct + d).clamp(-1, 2)),
-            wide: wide,
-            chromatic: _chromatic,
-            onChromatic: _toggleChromatic,
-          ),
-          _LiveKnobs(
-            wide: wide,
-            live: widget.live,
-            onChanged: () {
-              host?.setBus('live', vol: widget.live.vol, rev: widget.live.rev);
-              setState(() {});
-            },
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-              // ── 꾹 눌러 소리 유지 · 끌어서 음 잇기 ──
-              //
-              // **패드마다 Listener 를 달면 안 된다.** 손가락이 그 패드를 벗어나는
-              // 순간 그 위젯은 move 를 더 못 받는다(포인터는 처음 잡은 위젯에 묶인다).
-              // 그래서 격자 전체에 하나만 달고 **자리로 어느 패드인지 셈한다.**
-              child: _chromatic
-                  ? LayoutBuilder(
-                      builder: (context, c) {
-                        int? pcAt(Offset p) {
-                          if (p.dx < 0 || p.dx >= c.maxWidth) return null;
-                          if (p.dy < 0 || p.dy >= c.maxHeight) return null;
-                          return _PianoKeyboard.pitchClassAt(
-                            p,
-                            c.maxWidth,
-                            c.maxHeight,
-                          );
-                        }
-
-                        // 화면이 보여 주는 건 **피아노의 음이름(C·D#…)** 이지만
-                        // 잡는 건 **으뜸음에서 몇 반음**(semi) — 조가 바뀌어도
-                        // 저장한 것이 저절로 따라간다(도수와 같은 약속).
-                        int? semiAt(Offset p) {
-                          final pc = pcAt(p);
-                          if (pc == null) return null;
-                          return (pc - key.root % 12 + 12) % 12;
-                        }
-
-                        return Listener(
-                          onPointerDown: (e) {
-                            final s = semiAt(e.localPosition);
-                            if (s != null) _padDown(e.pointer, s);
-                          },
-                          onPointerMove: (e) {
-                            final s = semiAt(e.localPosition);
-                            if (s != null) _padSlide(e.pointer, s);
-                          },
-                          onPointerUp: (e) => _padUp(e.pointer),
-                          onPointerCancel: (e) => _padUp(e.pointer),
-                          child: _PianoKeyboard(
-                            hot: _hot,
-                            keyOf: key,
-                            oct: _oct,
-                            muted: (semi) => _muted(semi),
-                          ),
-                        );
-                      },
-                    )
-                  : LayoutBuilder(
-                      builder: (context, c) {
-                        // 두 줄 · 사이 6 — 아래 Column 과 같은 값이어야 한다
-                        final rowH = (c.maxHeight - 6) / 2;
-                        final colW = c.maxWidth / 7;
-                        int? padAt(Offset p) {
-                          if (p.dx < 0 || p.dx >= c.maxWidth) return null;
-                          if (p.dy < 0 || p.dy >= c.maxHeight) return null;
-                          final col = (p.dx / colW).floor().clamp(0, 6);
-                          // 위가 높은 옥타브(7~13), 아래가 낮은 쪽(0~6)
-                          final top = p.dy < rowH;
-                          if (!top && p.dy < rowH + 6) return null; // 줄 사이 틈
-                          return (top ? 7 : 0) + col;
-                        }
-
-                        return Listener(
-                          onPointerDown: (e) {
-                            final d = padAt(e.localPosition);
-                            if (d != null) _padDown(e.pointer, d);
-                          },
-                          onPointerMove: (e) {
-                            final d = padAt(e.localPosition);
-                            if (d != null) _padSlide(e.pointer, d);
-                          },
-                          onPointerUp: (e) => _padUp(e.pointer),
-                          onPointerCancel: (e) => _padUp(e.pointer),
-                          child: Column(
-                            children: [
-                              // 위가 높은 옥타브 — 악보와 같은 방향, 지금 손이
-                              // 있는 자리라 또렷하게 둔다.
-                              Expanded(
-                                child: _PadRow(
-                                  from: 7,
-                                  hot: _hot,
-                                  keyOf: key,
-                                  oct: _oct,
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              // 아래 옥타브는 살짝 죽여서 "지금 칠 자리"와
-                              // "한 옥타브 아래"가 한눈에 갈리게 한다(사용자
-                              // 요청, 2026-09-15: "배치를 잘 하자").
-                              Expanded(
-                                child: _PadRow(
-                                  from: 0,
-                                  dim: true,
-                                  hot: _hot,
-                                  keyOf: key,
-                                  oct: _oct,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
+      child: side
+          // ── 가로(폰): 좌우 2단 ──
+          // 왼쪽에 반주·녹음·악기·모드·슬라이더를 몰고, 오른쪽 전체를 패드가 쓴다.
+          // 예전엔 위에 석 줄(≈150dp)이 깔려 패드 두 줄이 각 90dp 남짓이었다.
+          // 고르는 칩 위치만 옮겼다 — 누름 판정은 `_padArea` 안(같은 위젯)에서 그대로다.
+          ? Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: (MediaQuery.sizeOf(context).width * 0.4).clamp(260.0, 344.0),
+                  decoration: const BoxDecoration(
+                    border: Border(right: BorderSide(color: Colors.white12)),
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(children: [topBar, controlRow(false), knobs(false)]),
+                  ),
+                ),
+                Expanded(child: _padArea()),
+              ],
+            )
+          : Column(
+              children: [
+                topBar,
+                controlRow(wide),
+                knobs(wide),
+                Expanded(child: _padArea()),
+              ],
             ),
-          ),
-        ],
-      ),
     );
   }
+
+  /// 패드 격자(또는 반음 건반) — 세로·가로가 **같은 위젯**을 쓴다. 가로에서는 자리만 옮긴다.
+  Widget _padArea() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+      // ── 꾹 눌러 소리 유지 · 끌어서 음 잇기 ──
+      //
+      // **패드마다 Listener 를 달면 안 된다.** 손가락이 그 패드를 벗어나는
+      // 순간 그 위젯은 move 를 더 못 받는다(포인터는 처음 잡은 위젯에 묶인다).
+      // 그래서 격자 전체에 하나만 달고 **자리로 어느 패드인지 셈한다.**
+      child: _chromatic
+          ? LayoutBuilder(
+              builder: (context, c) {
+                int? pcAt(Offset p) {
+                  if (p.dx < 0 || p.dx >= c.maxWidth) return null;
+                  if (p.dy < 0 || p.dy >= c.maxHeight) return null;
+                  return _PianoKeyboard.pitchClassAt(
+                    p,
+                    c.maxWidth,
+                    c.maxHeight,
+                  );
+                }
+
+                // 화면이 보여 주는 건 **피아노의 음이름(C·D#…)** 이지만
+                // 잡는 건 **으뜸음에서 몇 반음**(semi) — 조가 바뀌어도
+                // 저장한 것이 저절로 따라간다(도수와 같은 약속).
+                int? semiAt(Offset p) {
+                  final pc = pcAt(p);
+                  if (pc == null) return null;
+                  return (pc - key.root % 12 + 12) % 12;
+                }
+
+                return Listener(
+                  onPointerDown: (e) {
+                    final s = semiAt(e.localPosition);
+                    if (s != null) _padDown(e.pointer, s);
+                  },
+                  onPointerMove: (e) {
+                    final s = semiAt(e.localPosition);
+                    if (s != null) _padSlide(e.pointer, s);
+                  },
+                  onPointerUp: (e) => _padUp(e.pointer),
+                  onPointerCancel: (e) => _padUp(e.pointer),
+                  child: _PianoKeyboard(
+                    hot: _hot,
+                    keyOf: key,
+                    oct: _oct,
+                    muted: (semi) => _muted(semi),
+                  ),
+                );
+              },
+            )
+          : LayoutBuilder(
+              builder: (context, c) {
+                // 두 줄 · 사이 6 — 아래 Column 과 같은 값이어야 한다
+                final rowH = (c.maxHeight - 6) / 2;
+                final colW = c.maxWidth / 7;
+                int? padAt(Offset p) {
+                  if (p.dx < 0 || p.dx >= c.maxWidth) return null;
+                  if (p.dy < 0 || p.dy >= c.maxHeight) return null;
+                  final col = (p.dx / colW).floor().clamp(0, 6);
+                  // 위가 높은 옥타브(7~13), 아래가 낮은 쪽(0~6)
+                  final top = p.dy < rowH;
+                  if (!top && p.dy < rowH + 6) return null; // 줄 사이 틈
+                  return (top ? 7 : 0) + col;
+                }
+
+                return Listener(
+                  onPointerDown: (e) {
+                    final d = padAt(e.localPosition);
+                    if (d != null) _padDown(e.pointer, d);
+                  },
+                  onPointerMove: (e) {
+                    final d = padAt(e.localPosition);
+                    if (d != null) _padSlide(e.pointer, d);
+                  },
+                  onPointerUp: (e) => _padUp(e.pointer),
+                  onPointerCancel: (e) => _padUp(e.pointer),
+                  child: Column(
+                    children: [
+                      // 위가 높은 옥타브 — 악보와 같은 방향, 지금 손이
+                      // 있는 자리라 또렷하게 둔다.
+                      Expanded(
+                        child: _PadRow(
+                          from: 7,
+                          hot: _hot,
+                          keyOf: key,
+                          oct: _oct,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      // 아래 옥타브는 살짝 죽여서 "지금 칠 자리"와
+                      // "한 옥타브 아래"가 한눈에 갈리게 한다(사용자
+                      // 요청, 2026-09-15: "배치를 잘 하자").
+                      Expanded(
+                        child: _PadRow(
+                          from: 0,
+                          dim: true,
+                          hot: _hot,
+                          keyOf: key,
+                          oct: _oct,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
 }
 
 /// 악기 고르기 — **계열별로 묶어서** 보여 준다.
@@ -1392,11 +1424,15 @@ class _ControlRow extends StatelessWidget {
   final ValueChanged<int> onOct;
   final bool wide;
 
+  /// 가로 좌우 2단의 왼쪽 패널 — 줄바꿈되는 칩 무리로 쌓는다.
+  final bool side;
+
   /// 반음 건반(다이아토닉 패드 대신 12음 전부) 켜짐 여부.
   final bool chromatic;
   final VoidCallback onChromatic;
   const _ControlRow({
     required this.wide,
+    this.side = false,
     required this.voice,
     required this.onVoice,
     required this.favs,
@@ -1456,19 +1492,43 @@ class _ControlRow extends StatelessWidget {
       _Chip(label: '▼', on: false, onTap: () => onOct(-1)),
       Container(
         height: 40,
-        alignment: Alignment.center,
         padding: const EdgeInsets.symmetric(horizontal: 8),
-        child: Text(
-          oct == 0 ? '옥타브 기본' : '옥타브 ${oct > 0 ? '+$oct' : '$oct'}',
-          style: TextStyle(
-            fontSize: 12.5,
-            fontWeight: FontWeight.w800,
-            color: oct == 0 ? Colors.white54 : Colors.tealAccent.shade200,
+        child: Center(
+          widthFactor: 1,
+          child: Text(
+            oct == 0 ? '옥타브 기본' : '옥타브 ${oct > 0 ? '+$oct' : '$oct'}',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+              color: oct == 0 ? Colors.white54 : Colors.tealAccent.shade200,
+            ),
           ),
         ),
       ),
       _Chip(label: '▲', on: false, onTap: () => onOct(1)),
     ];
+
+    // 가로 좌우 2단: 왼쪽 패널 폭(≈344)에 맞춰 칩을 **줄바꿈**으로 쌓는다.
+    // 한 줄로 늘어놓으면 옆으로 밀어야 보이는 칩이 생긴다 — 여기서는 전부 보인다.
+    // 묶음(악기 · 건반 방식 · 옥타브/메트)을 줄 단위로 나눠 눈이 갈 자리를 만든다.
+    if (side) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(10, 8, 4, 2),
+        child: Wrap(
+          runSpacing: 6,
+          children: [
+            voiceChip,
+            // 최근 악기는 둘까지만 — 패널 높이가 빠듯해 셋째부터는 「피아노▾」 시트로 고른다.
+            for (final v in favs.take(2))
+              _Chip(label: VOICE_LABEL[v] ?? v, on: false, onTap: () => onFav(v)),
+            chromChip,
+            if (!chromatic) ...modeChips,
+            ...octChips,
+            metChip,
+          ],
+        ),
+      );
+    }
 
     // 가로: 폭이 남으니 **한 줄**(800dp 에 641dp 어치라 다 들어간다)
     if (wide) {
@@ -1690,15 +1750,19 @@ class _Chip extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 11),
-            alignment: Alignment.center,
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: on ? Colors.black87 : Colors.white70,
+          // `Center(widthFactor: 1)` — 글자 폭만큼만 차지한다. `Container(alignment:)`
+          // 는 줄바꿈(Wrap) 안에서 한 줄 폭을 통째로 먹어 칩마다 제 줄을 차지했다.
+          child: Center(
+            widthFactor: 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 11),
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: on ? Colors.black87 : Colors.white70,
+                ),
               ),
             ),
           ),

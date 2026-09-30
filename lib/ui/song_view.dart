@@ -360,36 +360,90 @@ class _SongViewState extends State<SongView> {
       builder: (context, _) {
         final spans = _spans();
         final total = spans.isEmpty ? 0.0 : spans.last.$1 + spans.last.$2;
+        // 가로(폰) — 머리를 두 줄로 접는다: [곡 재생·시간·반복·내보내기 | 진행 띠]
+        // 그리고 [보기 | 길이 | ＋구간]. 예전엔 5개 층(≈190dp)이 깔려 타임라인이
+        // 화면 3분의 1도 못 썼다. 세로 배치는 아래 else 그대로다.
+        final land = isShortLandscape(context) &&
+            MediaQuery.sizeOf(context).width >= 600;
+        Widget bar(bool compact) => _Bar(
+          compact: compact,
+          playing: widget.transport.playing,
+          total: total,
+          built: _built,
+          loop: _loop,
+          exporting: _exporting,
+          exportPct: _exportPct,
+          onExport: _export,
+          onPlay: _play,
+          onStop: _stop,
+          onLoop: (v) {
+            setState(() => _loop = v);
+            if (widget.transport.playing) _play();
+          },
+        );
+        Widget ruler() => LoopPosBuilder(
+          host: widget.host,
+          loopSec: total,
+          builder: (context, pos, looping) => _Ruler(
+            spans: spans,
+            total: total,
+            pos: pos,
+            looping: looping,
+            scenes: widget.project.scenes,
+            sections: song.sections,
+            bpm: widget.transport.bpm,
+          ),
+        );
+        void addSection(int i) {
+          song.add(i);
+          _refresh();
+        }
+
         return Column(
           children: [
-            _Bar(
-              playing: widget.transport.playing,
-              total: total,
-              built: _built,
-              loop: _loop,
-              exporting: _exporting,
-              exportPct: _exportPct,
-              onExport: _export,
-              onPlay: _play,
-              onStop: _stop,
-              onLoop: (v) {
-                setState(() => _loop = v);
-                if (widget.transport.playing) _play();
-              },
-            ),
-            LoopPosBuilder(
-              host: widget.host,
-              loopSec: total,
-              builder: (context, pos, looping) => _Ruler(
-                spans: spans,
-                total: total,
-                pos: pos,
-                looping: looping,
-                scenes: widget.project.scenes,
-                sections: song.sections,
-                bpm: widget.transport.bpm,
+            if (land) ...[
+              Container(
+                decoration: const BoxDecoration(
+                  border: Border(bottom: BorderSide(color: Colors.white12)),
+                ),
+                child: Row(
+                  children: [
+                    SizedBox(width: 320, child: bar(true)),
+                    Expanded(child: ruler()),
+                  ],
+                ),
               ),
-            ),
+              SizedBox(
+                height: 48,
+                child: Row(
+                  children: [
+                    Expanded(
+                      flex: 4,
+                      child: _ModeBar(
+                        mode: widget.mode,
+                        onPick: (m) => widget.onMode?.call(m),
+                      ),
+                    ),
+                    Expanded(flex: 5, child: _lengthBar(context, total)),
+                    // 붙이기는 가로에서 위 줄로 올린다 — 아래에 못 박아 두면 그만큼
+                    // 타임라인이 줄어든다. 눌러야 뜨는 시트(compact)라 자리는 이만큼이면 된다.
+                    SizedBox(
+                      width: scaled(context, 168),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(4, 4, 8, 4),
+                        child: _AddSection(
+                          scenes: widget.project.scenes,
+                          compact: true,
+                          onAdd: addSection,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+            bar(false),
+            ruler(),
             // 가로로 누우면 높이가 귀하다 — 길이 줄과 보기 줄을 **한 줄로 붙인다**
             // (따로 두면 42px 이 더 들어 곡 목록이 화면 밖으로 밀린다).
             if (MediaQuery.of(context).size.height < 520)
@@ -416,9 +470,11 @@ class _SongViewState extends State<SongView> {
                 onPick: (m) => widget.onMode?.call(m),
               ),
             ],
+            ],
             if (widget.mode == 'timeline')
               Expanded(
                 child: _Timeline(
+                  fill: land,
                   onEditScene: widget.onEditScene,
                   copied: _copied,
                   copiedTrack: _copiedTrack,
@@ -477,14 +533,12 @@ class _SongViewState extends State<SongView> {
             // 붙이기 줄은 **아래 고정** — 구간이 많아지면 맨 아래까지 스크롤해야 했다.
             // 가로로 누우면 높이가 귀하니 인라인 칩 대신 눌러야 뜨는 시트로 뺀다
             // (위 길이·보기 줄 합치기와 같은 문턱).
-            _AddSection(
-              scenes: widget.project.scenes,
-              compact: MediaQuery.of(context).size.height < 520,
-              onAdd: (i) {
-                song.add(i);
-                _refresh();
-              },
-            ),
+            if (!land)
+              _AddSection(
+                scenes: widget.project.scenes,
+                compact: MediaQuery.of(context).size.height < 520,
+                onAdd: addSection,
+              ),
           ],
         );
       },
@@ -758,7 +812,11 @@ class _Bar extends StatelessWidget {
   final SceneBuild? built;
   final VoidCallback onPlay, onStop, onExport;
   final ValueChanged<bool> onLoop;
+
+  /// 가로 한 줄 머리 — 안내 문장과 아래 테두리를 빼고 높이를 줄인다.
+  final bool compact;
   const _Bar({
+    this.compact = false,
     required this.playing,
     required this.total,
     required this.built,
@@ -775,10 +833,14 @@ class _Bar extends StatelessWidget {
   Widget build(BuildContext context) {
     final b = built;
     return Container(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: Colors.white12)),
-      ),
+      padding: compact
+          ? const EdgeInsets.fromLTRB(10, 6, 4, 6)
+          : const EdgeInsets.fromLTRB(10, 8, 10, 6),
+      decoration: compact
+          ? null
+          : const BoxDecoration(
+              border: Border(bottom: BorderSide(color: Colors.white12)),
+            ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -883,13 +945,15 @@ class _Bar extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 2),
-          const Text(
-            '구간을 늘어놓고 ▶ 를 누르면 한 곡으로 이어 흐릅니다.',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 11, color: Colors.white38),
-          ),
+          if (!compact) ...[
+            const SizedBox(height: 2),
+            const Text(
+              '구간을 늘어놓고 ▶ 를 누르면 한 곡으로 이어 흐릅니다.',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: Colors.white38),
+            ),
+          ],
         ],
       ),
     );
@@ -1100,7 +1164,12 @@ class _Timeline extends StatelessWidget {
   final VoidCallback onChanged;
   final ValueChanged<int> onPlayFrom;
 
+  /// 가로로 누웠을 때 — 마디 폭을 화면 폭에 맞춰 넓힌다(짧은 곡이 왼쪽에 몰려
+  /// 오른쪽이 텅 비지 않게). 세로는 예전 그대로 [kTimelineBarW] 고정이다.
+  final bool fill;
+
   const _Timeline({
+    this.fill = false,
     required this.onEditScene,
     required this.copied,
     required this.copiedTrack,
@@ -1139,6 +1208,19 @@ class _Timeline extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!fill) return _buildBody(context, _barW);
+    return LayoutBuilder(
+      builder: (context, c) {
+        final totalBars = _bars().fold<int>(0, (a, b) => a + b.$2);
+        final w = totalBars <= 0
+            ? _barW
+            : ((c.maxWidth - _labelW) / totalBars).clamp(_barW, 72.0);
+        return _buildBody(context, w);
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context, double barW) {
     if (song.sections.isEmpty) {
       return const Center(
         child: Padding(
@@ -1153,7 +1235,7 @@ class _Timeline extends StatelessWidget {
     }
     final bars = _bars();
     final totalBars = bars.isEmpty ? 0 : bars.last.$1 + bars.last.$2;
-    final width = (totalBars * _barW).clamp(_barW, 1 << 20).toDouble();
+    final width = (totalBars * barW).clamp(barW, 1 << 20).toDouble();
     final selOk = sel >= 0 && sel < song.sections.length;
     final tracks = project.tracks;
 
@@ -1260,7 +1342,7 @@ class _Timeline extends StatelessWidget {
                   child: _LaneScroll(
                     host: host,
                     total: total,
-                    xOf: (now) => _headX(spans, bars, now, _barW),
+                    xOf: (now) => _headX(spans, bars, now, barW),
                     child: SizedBox(
                       width: width,
                       child: Stack(
@@ -1269,7 +1351,7 @@ class _Timeline extends StatelessWidget {
                             children: [
                               _Ruler2(
                                 totalBars: totalBars,
-                                barW: _barW,
+                                barW: barW,
                                 height: _rulerH,
                               ),
                               _SceneLane(
@@ -1277,7 +1359,7 @@ class _Timeline extends StatelessWidget {
                                 scenes: scenes,
                                 project: project,
                                 bars: bars,
-                                barW: _barW,
+                                barW: barW,
                                 height: _sceneH,
                                 sel: sel,
                                 onSelect: onSelect,
@@ -1289,7 +1371,7 @@ class _Timeline extends StatelessWidget {
                                   song: song,
                                   project: project,
                                   bars: bars,
-                                  barW: _barW,
+                                  barW: barW,
                                   height: _laneH,
                                   onTapBar: (secIndex, barInSec) =>
                                       _putClip(context, t, secIndex, barInSec),
@@ -1325,7 +1407,7 @@ class _Timeline extends StatelessWidget {
                                     ? const SizedBox.shrink()
                                     : CustomPaint(
                                         painter: _HeadPainter(
-                                          _xOf(pos * total, bars),
+                                          _headX(spans, bars, pos * total, barW),
                                           _rulerH,
                                         ),
                                       ),
@@ -1363,9 +1445,6 @@ class _Timeline extends StatelessWidget {
       ],
     );
   }
-
-  double _xOf(double now, List<(int, int)> bars) =>
-      _headX(spans, bars, now, _barW);
 
   Future<void> _putClip(
     BuildContext context,
@@ -2890,9 +2969,13 @@ class _AddSection extends StatelessWidget {
             ),
             child: const Row(
               children: [
-                Text(
-                  '＋구간 붙이기',
-                  style: TextStyle(fontSize: 12.5, color: Colors.white70),
+                Flexible(
+                  child: Text(
+                    '＋구간 붙이기',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12.5, color: Colors.white70),
+                  ),
                 ),
                 Spacer(),
                 Icon(Icons.chevron_right, size: 18, color: Colors.white38),

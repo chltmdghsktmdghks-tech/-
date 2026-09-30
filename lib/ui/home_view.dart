@@ -498,9 +498,13 @@ class _HomeViewState extends State<HomeView> {
           animation: Listenable.merge([project, transport, store]),
           builder: (context, _) {
             final wide = MediaQuery.of(context).size.width >= 720;
+            // 가로로 누웠나(2026-09-30) — 높이가 귀하니 위 막대는 얇게, 시작하기
+            // 두 입구는 좌우로 나란히 놓는다. 세로 배치는 그대로다.
+            final land = isLandscape(context);
             return Column(
               children: [
                 _TopBar(
+                  land: land,
                   ready: ready,
                   audioError: widget.audioError,
                   simple: simple,
@@ -522,10 +526,12 @@ class _HomeViewState extends State<HomeView> {
                               current: _filterGenre,
                               onPick: (g) => setState(() => _filterGenre = g),
                             ),
-                            Expanded(child: _mainArea(context, showFilterRow: false)),
+                            Expanded(
+                              child: _mainArea(context, showFilterRow: false, land: land),
+                            ),
                           ],
                         )
-                      : _mainArea(context, showFilterRow: true),
+                      : _mainArea(context, showFilterRow: true, land: land),
                 ),
               ],
             );
@@ -535,25 +541,45 @@ class _HomeViewState extends State<HomeView> {
     );
   }
 
-  Widget _mainArea(BuildContext context, {required bool showFilterRow}) {
+  Widget _mainArea(
+    BuildContext context, {
+    required bool showFilterRow,
+    bool land = false,
+  }) {
     final songs = _visibleSongs();
+    final startA = _Start(
+      icon: '🎼',
+      title: '질문에 답해서 곡 만들기',
+      desc: '기분·장면 열 가지만 고르면 · 음악 용어 없음',
+      onTap: _askSong,
+    );
+    final startB = _Start(
+      icon: '👆',
+      title: '두드려서 만들기',
+      desc: '장르 고르고 킥·스네어·하이햇을 직접 쳐서 · 이론 몰라도 OK',
+      onTap: _doodlePlay,
+    );
     return ListView(
-      padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
+      padding: EdgeInsets.fromLTRB(20, land ? 12 : 18, 20, 24),
       children: [
-        _Start(
-          icon: '🎼',
-          title: '질문에 답해서 곡 만들기',
-          desc: '기분·장면 열 가지만 고르면 · 음악 용어 없음',
-          onTap: _askSong,
-        ),
-        const SizedBox(height: 10),
-        _Start(
-          icon: '👆',
-          title: '두드려서 만들기',
-          desc: '장르 고르고 킥·스네어·하이햇을 직접 쳐서 · 이론 몰라도 OK',
-          onTap: _doodlePlay,
-        ),
-        const SizedBox(height: 16),
+        if (land)
+          // 가로: 두 입구를 좌우로 — 세로로 쌓으면 카드 그리드가 첫 화면 밖으로 밀린다.
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: startA),
+                const SizedBox(width: 12),
+                Expanded(child: startB),
+              ],
+            ),
+          )
+        else ...[
+          startA,
+          const SizedBox(height: 10),
+          startB,
+        ],
+        SizedBox(height: land ? 12 : 16),
         if (showFilterRow) ...[
           _FilterRow(
             genres: _genresInUse(),
@@ -741,6 +767,8 @@ class _HomeViewState extends State<HomeView> {
 }
 
 class _TopBar extends StatelessWidget {
+  /// 가로로 누웠을 때 — 세로 여백을 줄여 카드 자리를 되찾는다.
+  final bool land;
   final bool ready;
   final String? audioError;
   final bool simple;
@@ -748,6 +776,7 @@ class _TopBar extends StatelessWidget {
   final VoidCallback? onSettings;
   final VoidCallback onHelp;
   const _TopBar({
+    this.land = false,
     required this.ready,
     required this.audioError,
     required this.simple,
@@ -759,8 +788,8 @@ class _TopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(14, 10, 14, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      margin: EdgeInsets.fromLTRB(14, land ? 6 : 10, 14, 0),
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: land ? 2 : 10),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(14),

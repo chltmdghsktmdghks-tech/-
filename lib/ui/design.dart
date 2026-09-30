@@ -84,3 +84,18 @@ abstract final class DS {
   static const space16 = 16.0;
   static const space24 = 24.0;
 }
+
+/// 가로로 누운 화면인가 — 폭이 높이보다 크면 그렇다(2026-09-30, 가로 적응 2순위).
+///
+/// 세로 배치는 그대로 두고 **가로일 때만** 분기하려고 화면마다 같은 잣대를 쓴다.
+/// 높이가 귀한 폰 가로(≈393dp)와 넉넉한 태블릿 가로를 가르려면 [isShortLandscape].
+bool isLandscape(BuildContext context) {
+  final s = MediaQuery.sizeOf(context);
+  return s.width > s.height;
+}
+
+/// 가로인데 높이도 모자란 화면(폰 가로, 높이 520dp 미만).
+bool isShortLandscape(BuildContext context) {
+  final s = MediaQuery.sizeOf(context);
+  return s.width > s.height && s.height < 520;
+}

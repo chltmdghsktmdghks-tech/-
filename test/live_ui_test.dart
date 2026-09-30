@@ -219,23 +219,27 @@ void main() {
     final err = tester.takeException();
     check('10) 가로·세로 둘 다 안 넘침', err == null, '넘침 예외 ${err ?? '없음'}');
 
-    // 14) 가로에서는 볼륨·울림이 **한 줄**이다. 세로처럼 두 줄이면 패드가
-    //     화면의 3분의 1로 쪼그라든다(폭은 남는데 높이를 낭비한다).
+    // 14) 가로(폰)에서는 **좌우 2단**이다(2026-09-30). 볼륨·울림·악기 칩은 왼쪽 패널에
+    //     몰리고 — 화면 밖으로 밀려 스크롤해야 닿으면 안 된다 — 패드가 오른쪽을 다 쓴다.
+    //     (예전: 볼륨·울림을 한 줄로 붙여 위에 석 줄을 깔았다. 패드 각 줄 ≈90px.)
     final vol = tester.getCenter(find.text('볼륨'));
     final rev = tester.getCenter(find.text('울림'));
     check(
-      '14) 가로는 볼륨·울림 한 줄',
-      (vol.dy - rev.dy).abs() < 1 && rev.dx > vol.dx,
-      '볼륨 y${vol.dy.round()} · 울림 y${rev.dy.round()}',
+      '14) 가로는 볼륨·울림이 왼쪽 패널 안(화면 안)',
+      vol.dy < 400 && rev.dy < 400 && rev.dx < 400 && rev.dy > vol.dy,
+      '볼륨 y${vol.dy.round()} · 울림 y${rev.dy.round()} · x${rev.dx.round()} (화면 800x400)',
     );
 
-    // 15) 그래서 **위쪽 설정이 화면 절반 전에 끝난다** — 나머지가 전부 패드다.
-    //     (패드 자체를 재려면 사설 위젯이라 못 잡아서, 마지막 설정 줄로 잰다)
-    final chromeEnds = tester.getBottomRight(find.text('울림')).dy;
+    // 15) 패드가 화면 높이를 거의 다 쓴다 — 패드 한 칸("1")의 높이로 잰다.
+    final padBox = tester.getSize(
+      find
+          .ancestor(of: find.text('1').first, matching: find.byType(AnimatedContainer))
+          .first,
+    );
     check(
-      '15) 패드가 절반 넘게',
-      400 - chromeEnds > 200,
-      '설정이 y${chromeEnds.round()} 에서 끝 → 패드 ${(400 - chromeEnds).round()}px (화면 400)',
+      '15) 패드 한 칸이 예전(≈90px)보다 크게',
+      padBox.height > 120,
+      '패드 ${padBox.width.round()}x${padBox.height.round()} (화면 800x400)',
     );
 
     // ── 16) **녹음 중에 뒤로가기를 눌러도 친 것이 안 사라진다** ──
