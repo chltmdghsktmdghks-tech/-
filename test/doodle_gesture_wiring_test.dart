@@ -379,9 +379,11 @@ void main() {
       final n8 = await rollHits(500); // 가운데 (frac ≈ 0.55)
       expect(n16, greaterThan(0));
       expect(n8, greaterThan(0));
-      expect(n16, greaterThan(n8 * 1.5),
-          reason: '16비트는 8비트의 약 2배 촘촘 (16비트 $n16 vs 8비트 $n8)');
-      expect(n16, lessThan(n8 * 2.6), reason: '너무 촘촘해도 안 된다(32분 아님)');
+      // 개수 비율은 실시간 타이머라 병렬 부하에서 흔들린다 — 밀도 비율은 순수 규칙으로 고정 입력에서 잰다.
+      expect(n16, greaterThanOrEqualTo(n8),
+          reason: '16비트가 8비트보다 성기면 안 된다 (16비트 $n16 vs 8비트 $n8)');
+      expect(hatRollUnit(kHatBand8) / hatRollUnit(kHatBand16), 2.0,
+          reason: '16비트는 8비트의 정확히 2배 촘촘(32분 아님)');
 
       // 가운데 구역을 꾹 눌러도 오픈이 아니다(예전엔 0.6 아래는 무조건 오픈이었다).
       host.looping();

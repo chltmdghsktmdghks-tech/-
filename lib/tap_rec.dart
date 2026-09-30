@@ -30,6 +30,37 @@ extension TapSnapX on TapSnap {
   String get label => this == TapSnap.eighth ? '8분' : '16분';
 }
 
+// ── 지연 보정 (2026-09-30) ──
+//
+// 엔진이 보고하는 위치(`loopPos`)는 이미 `렌더 - 버퍼` = 「버퍼가 끝나는 자리」다. 그래서
+// 버퍼(`latencyMs`)를 또 빼면 이중 보정이다. 그런데 그 뒤에도 **모델에 없는 지연**이 둘 남는다:
+//  · 터치 → 앱 (화면 주사·입력 큐) — 예산폰 30~50ms
+//  · 버퍼 끝 → 실제 귀 (AudioTrack 하드웨어 버퍼·DAC) — 예산폰 30~60ms, 엔진이 못 잰다
+// 자에 맞춰 친 손은 「들린 자리 + 두 지연」에서 앱에 닿는다. 예전 0.03 은 앞의 것만 셌다.
+// 실기기에서 밀리면(늦게 찍히면) 이 두 값을 올리고, 일찍 찍히면 내린다.
+// 근본 처방은 사용자 캘리브레이션이다(HANDOFF 2026-09-30 제안).
+
+/// 터치가 앱에 닿기까지(초).
+const double kTouchLatencySec = 0.035;
+
+/// 버퍼 끝에서 실제 소리가 나기까지 — 엔진이 모르는 몫(초).
+const double kOutputLatencySec = 0.035;
+
+/// 사람·기기별 캘리브레이션으로 얹을 보정(초). 지금은 0 — 측정 기능이 생기면 여기에 저장값을 넣는다.
+const double kUserLatencyOffsetSec = 0.0;
+
+/// 위치→칸 계산에 쓸 총 지연(초).
+double doodleLatencySec({
+  double touch = kTouchLatencySec,
+  double output = kOutputLatencySec,
+  double user = kUserLatencyOffsetSec,
+}) => touch + output + user;
+
+/// 킥·스네어의 「8분 격자 + 홀수 16분 허용」에서 **홀수 16분 칸이 잡히는 반경**(칸 단위).
+/// 0 이면 순수 8분. 0.4 면 홀수 칸(16분 뒷박) 근처 ±0.4칸만 16분으로, 나머지(±0.6칸)는 8분으로 —
+/// 손 떨림으로 8분이 16분으로 흩어지지 않고, 의도한 16분만 산다. 0.5 는 순수 16분과 같다.
+const double kOddSixteenthTol = 0.4;
+
 /// 두드림 하나 — 어느 판을 몇 번째 칸에, 몇 칸 길이로.
 class TapHit {
   /// 두드린 판 번호. 가락·베이스·화음은 판이 하나라 늘 0, 드럼은 0~3.
@@ -71,6 +102,9 @@ class TapRecorder {
   final TapSnap snap;
   final double latencySec;
 
+  /// [snap] 이 8분일 때 홀수 16분 칸을 잡는 반경(칸). 0 이면 순수 8분. [kOddSixteenthTol] 참고.
+  final double oddTol;
+
   /// 이 곡의 한 마디가 몇 칸인가 — 기본은 16(4/4, 여태와 같은 답).
   final int spb;
 
@@ -86,6 +120,7 @@ class TapRecorder {
     required this.loopSec,
     this.snap = TapSnap.eighth,
     this.latencySec = 0,
+    this.oddTol = 0,
     this.spb = kStepsPerBar,
   });
 
@@ -105,6 +140,11 @@ class TapRecorder {
     final raw = p * _bars * spb;
     final u = snap.unit;
     var s = (raw / u).round() * u;
+    if (u == 2 && oddTol > 0) {
+      // 가장 가까운 홀수 칸이 반경 안이면 16분 뒷박으로 인정한다.
+      final o = ((raw - 1) / 2).round() * 2 + 1;
+      if ((raw - o).abs() <= oddTol) s = o;
+    }
     s %= steps;
     return s < 0 ? s + steps : s;
   }
@@ -145,9 +185,10 @@ class TapRecorder {
   /// 칸 순서로 — 편집기가 읽는 순서와 같게.
   List<TapHit> hits() {
     final out = _hits.values.toList();
-    out.sort((a, b) => a.step == b.step
-        ? a.pad.compareTo(b.pad)
-        : a.step.compareTo(b.step));
+    out.sort(
+      (a, b) =>
+          a.step == b.step ? a.pad.compareTo(b.pad) : a.step.compareTo(b.step),
+    );
     return out;
   }
 }

@@ -24,13 +24,12 @@ class DoodleChordPick {
 
   @override
   bool operator ==(Object other) =>
-      other is DoodleChordPick &&
-      other.degree == degree &&
-      other.type == type;
+      other is DoodleChordPick && other.degree == degree && other.type == type;
   @override
   int get hashCode => Object.hash(degree, type);
   @override
-  String toString() => 'DoodleChordPick($degree${type == null ? '' : ',$type'})';
+  String toString() =>
+      'DoodleChordPick($degree${type == null ? '' : ',$type'})';
 }
 
 /// 세컨더리 도미넌트를 써도 어울리는 장르(재즈 계열·도시적인 것).
@@ -112,10 +111,26 @@ List<DoodleChordPick> doodleBasePlan({
   final out = [
     for (var i = 0; i < bars; i++) DoodleChordPick(degs[i % degs.length]),
   ];
+  // 재즈 계열은 **토닉으로 가는 V 를 V7 으로** — 단조의 v(단3화음)는 해결감이 약하고, ii-V-I 의 V 는
+  // 7음이 있어야 I 로 「풀린다」. 판이 도니까 마지막 마디의 V 도 첫 마디 I 로 이어진다.
+  if (jazzy) {
+    for (var i = 0; i < out.length; i++) {
+      final nxt = out[(i + 1) % out.length];
+      if (out[i].degree == 4 && out[i].type == null && nxt.degree == 0) {
+        out[i] = const DoodleChordPick(4, 'dom7');
+      }
+    }
+  }
   // 이웃 마디가 같은 코드로 붙으면(8마디 이음매에서 생긴다) **해결 한 걸음**으로 비켜 준다.
   for (var i = 1; i < out.length; i++) {
     if (out[i] == out[i - 1]) {
-      out[i] = doodleStepChord(out[i - 1], 1, mode: mode, genre: genre, salt: i);
+      out[i] = doodleStepChord(
+        out[i - 1],
+        1,
+        mode: mode,
+        genre: genre,
+        salt: i,
+      );
     }
   }
   return out;
@@ -147,7 +162,7 @@ const DoodleChordPick _c0 = DoodleChordPick(0),
 /// 해결 쪽 후보(안정) — 그 조에서 어울리는 것만.
 const Map<int, List<DoodleChordPick>> _kResolveMajor = {
   0: [_c5, _c5, _c3], // I → vi / IV
-  1: [_c0, _c3], // ii → I / IV
+  1: [_c4, _c4, _c0], // ii → V (ii-V, 가장 자연스러운 걸음) / I
   2: [_c5, _c5, _c3], // iii → vi / IV
   3: [_c0, _c0, _c5], // IV → I (플라갈) / vi
   4: [_c0, _c0, _c0, _c5], // V → I / vi(기만)
@@ -167,7 +182,7 @@ const Map<int, List<DoodleChordPick>> _kResolveMinor = {
 /// 긴장 쪽 후보(불안·전진). dom7 이 붙은 것은 V7/세컨더리 도미넌트.
 const Map<int, List<DoodleChordPick>> _kTenseMajor = {
   0: [_v7, _v7, _c1, _iii7], // I → V7 / ii / III7
-  1: [_v7, _v7, _c6], // ii → V7 / vii°
+  1: [_v7, _v7, _v7, _c2], // ii → V7 / iii
   2: [_vi7, _c1, _c3], // iii → VI7 / ii / IV
   3: [_v7, _v7, _c1], // IV → V7 / ii
   4: [_v7, _c6], // V → V7 / vii°
@@ -201,8 +216,17 @@ DoodleChordPick doodleStepChord(
   final major = _isMajor(mode);
   // 도미넌트 7 은 뿌리가 5도 아래인 코드로 풀린다 — 「해결」 방향에서만.
   if (dir > 0 && from.type == 'dom7') {
-    final t = DoodleChordPick((from.degree + 3) % 7);
+    final t = doodleResolveDom(from);
     if (t != from) return t;
+  }
+  // 세컨더리 도미넌트에서 **긴장**을 더 주면 5도권으로 한 칸 더 끈다(III7→VI7→II7→V7). 재즈 계열만,
+  // 그리고 토닉(I7)으로는 가지 않는다 — 딴 조 소리가 난다.
+  if (dir < 0 &&
+      from.type == 'dom7' &&
+      from.degree != 4 &&
+      _kJazzy.contains(genre)) {
+    final d = (from.degree + 3) % 7;
+    if (d != 0) return DoodleChordPick(d, 'dom7');
   }
   final table = dir < 0
       ? (major ? _kTenseMajor : _kTenseMinor)
@@ -215,11 +239,19 @@ DoodleChordPick doodleStepChord(
     ];
     if (plain.isNotEmpty) cands = plain;
   }
-  final diff = [for (final c in cands) if (c != from) c];
+  final diff = [
+    for (final c in cands)
+      if (c != from) c,
+  ];
   final pool = diff.isEmpty ? cands : diff;
   if (pool.isEmpty) return from;
   return pool[salt.abs() % pool.length];
 }
+
+/// 도미넌트 7 이 **풀리는 자리** — 뿌리가 5도 아래(도수 +3)인 3화음.
+/// dom7 이 아니면 그대로 돌려준다.
+DoodleChordPick doodleResolveDom(DoodleChordPick p) =>
+    p.type == 'dom7' ? DoodleChordPick((p.degree + 3) % 7) : p;
 
 // ── 상하 = 코드 색 ──
 
@@ -288,7 +320,18 @@ ChordSpec doodleChordSpec(MusicKey key, DoodleChordPick pick, int color) {
 }
 
 const List<String> _kPcName = [
-  'C', 'C#', 'D', 'Eb', 'E', 'F', 'F#', 'G', 'Ab', 'A', 'Bb', 'B',
+  'C',
+  'C#',
+  'D',
+  'Eb',
+  'E',
+  'F',
+  'F#',
+  'G',
+  'Ab',
+  'A',
+  'Bb',
+  'B',
 ];
 
 /// 이름표 — `Am7`, `G`, `E7` 처럼 사람이 아는 코드 이름.
@@ -311,8 +354,12 @@ class DoodleChordPlan {
   final Map<int, int> _barColor = {};
   int _settled = 0;
 
-  DoodleChordPlan(this.base, {required this.mode, this.genre = '', math.Random? rng})
-    : rng = rng ?? math.Random();
+  DoodleChordPlan(
+    this.base, {
+    required this.mode,
+    this.genre = '',
+    math.Random? rng,
+  }) : rng = rng ?? math.Random();
 
   /// 판을 처음(깔아 둔 진행)으로 되돌린다 — 다시 녹음.
   void reset() {
@@ -328,16 +375,31 @@ class DoodleChordPlan {
   void settleUpTo(int bar) {
     final last = _clamp(bar);
     while (_settled < last) {
-      final dir = _landDir[_settled] ?? 0;
-      if (dir != 0) {
-        plan[_settled + 1] = _stepFor(_settled, dir);
-      }
+      plan[_settled + 1] = _nextOf(_settled);
       _settled++;
     }
   }
 
-  DoodleChordPick _stepFor(int bar, int dir) =>
-      doodleStepChord(plan[bar], dir, mode: mode, genre: genre, salt: salt + bar * 31);
+  /// [bar] 다음 마디에 실제로 깔릴 코드. 착지가 가운데(0)라도 **떠 있는 도미넌트 7 은 풀어 준다** —
+  /// 안 그러면 V7·III7 뒤에 깔린 진행의 아무 코드나 붙어 「풀리지 않은 채 딴 데로」 가 되어 어색하다.
+  DoodleChordPick _nextOf(int bar) {
+    final dir = _landDir[bar] ?? 0;
+    if (dir != 0) return _stepFor(bar, dir);
+    final cur = plan[bar];
+    final nxt = plan[bar + 1];
+    if (cur.type == 'dom7' && nxt.degree != (cur.degree + 3) % 7) {
+      return doodleResolveDom(cur);
+    }
+    return nxt;
+  }
+
+  DoodleChordPick _stepFor(int bar, int dir) => doodleStepChord(
+    plan[bar],
+    dir,
+    mode: mode,
+    genre: genre,
+    salt: salt + bar * 31,
+  );
 
   /// **다음 마디 코드 미리보기** — 지금 마디(들)의 착지 방향이 이대로 확정될 때의 코드.
   /// 마디 끝에 [settleUpTo] 가 만드는 것과 **같은 값**이다(같은 salt). 판의 마지막 마디면 null.
@@ -345,8 +407,7 @@ class DoodleChordPlan {
     final b = _clamp(bar);
     if (b + 1 >= plan.length) return null;
     settleUpTo(b);
-    final dir = _landDir[b] ?? 0;
-    return dir == 0 ? plan[b + 1] : _stepFor(b, dir);
+    return _nextOf(b);
   }
 
   /// 지금 [bar] 마디에서 울릴 코드(앞 마디들을 먼저 확정한다).

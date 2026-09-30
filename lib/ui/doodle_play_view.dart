@@ -595,7 +595,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
   /// **귀에 들리는 자리**라서 출력 버퍼는 거기서 이미 빠져 있다. 남은 것은
   /// 터치 입력 지연뿐이므로 버퍼 손잡이와 떼어 놓는다(손잡이를 만질 때마다
   /// 찍히는 자리가 따라 움직이면 안 된다).
-  static const double _kTouchLatencySec = 0.03;
+  static final double _kTouchLatencySec = doodleLatencySec();
 
   /// 들어오기 전 값 — 나갈 때 그대로 되돌린다.
   int? _prevAhead;
@@ -1149,6 +1149,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     loopSec: _loopSec,
     snap: _snapOf(_stageDef),
     latencySec: _kTouchLatencySec,
+    oddTol: _oddTolOf(_stageDef),
     spb: widget.project.spb,
   );
 
@@ -1274,6 +1275,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       (s.kind == DoodleKind.drum && s.drumLane == 'hat')
       ? TapSnap.sixteenth
       : TapSnap.eighth;
+
+  /// 킥·스네어는 8분 격자에 **홀수 16분도 반경 안이면** 잡는다(`kOddSixteenthTol`).
+  /// 하이햇은 이미 순수 16분이라 0.
+  double _oddTolOf(DoodleStage s) =>
+      (s.kind == DoodleKind.drum && s.drumLane != 'hat') ? kOddSixteenthTol : 0;
 
   /// **꾹 눌러 굴리는 것이 이 악기에 뜻이 있는가** (사용자 지적, 2026-09-22:
   /// "킥에서 누르고있으면 연타하는 기능이 왜 필요하니").
