@@ -331,11 +331,11 @@ class _LiveViewState extends State<LiveView> {
     if (from != null) _record(was, heldFrom: from);
     _down[pointer] = degree;
     _downAt[pointer] = _clock.pos(_loopSec);
-    // 엔진이 같은 번호의 앞 음을 알아서 놓지만, 그냥 놓고 새로 켜면 딱 끊겨
-    // 붙는다 — 옆 칸으로 **미끄러지듯** 넘어가라고(사용자 요청, 2026-09-15)
-    // 앞 음 높이를 `glideF`로 같이 보낸다. 엔진은 이미 그 값으로 포르타멘토를
-    // 만들 줄 안다(`synth.dart` — 멜로디 레가토에 이미 쓰던 길).
-    _hold(pointer, degree, fromDegree: was);
+    // 옆 칸으로 넘어갈 때 앞 음을 놓고 새 음을 **딱 끊어 새로 친다**(글리산도)
+    // — 건반 위를 손가락으로 훑듯 각 음이 또렷이 난다. (2026-09-30 사용자 요청:
+    // 포르타멘토로 피치가 미끄러져 올라가던 것을 없애고 글리산도로. `fromDegree`
+    // 를 안 넘기면 `_hold` 가 `glideF` 없이 새 음을 문다.)
+    _hold(pointer, degree);
     setState(() {
       _hot.remove(was);
       _hot.add(degree);
