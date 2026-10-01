@@ -29,6 +29,10 @@ import 'synth.dart' show Human;
 
 class KickK {
   final double f, end, rel, punch, click, clickHz, drive, sub;
+
+  /// 비터 「딱」을 하나 더 얹는 세기(0 = 예전 소리 그대로). 2~6kHz 대역의 아주 짧은(3.5ms)
+  /// 클릭이 서브·펀치보다 먼저 나와 트랜지언트가 또렷해진다. 2026-10-01.
+  final double snap;
   const KickK(
     this.f,
     this.end,
@@ -37,12 +41,16 @@ class KickK {
     this.click,
     this.clickHz,
     this.drive,
-    this.sub,
-  );
+    this.sub, {
+    this.snap = 0,
+  });
 }
 
 class SnareK {
   final double tone0, tone1, noise, rel, bright, wire, open, shell;
+
+  /// 스틱이 헤드를 때리는 「탁」 크랙 — 3~7kHz 대역 4ms 짜리를 얹는 세기(0 = 예전 소리 그대로).
+  final double crack;
   const SnareK(
     this.tone0,
     this.tone1,
@@ -51,13 +59,29 @@ class SnareK {
     this.bright,
     this.wire,
     this.open,
-    this.shell,
-  );
+    this.shell, {
+    this.crack = 0,
+  });
 }
 
 class HatK {
   final double hi, rel, tune, metal, noise;
-  const HatK(this.hi, this.rel, this.tune, this.metal, this.noise);
+
+  /// 합성 하이햇의 「칫칫」 고역 — 0 이면 예전 소리 그대로(표본 킷의 로딩 전 대체음).
+  /// [air] 잡음에 거는 10kHz 하이 셸프(dB) · [snap] 스틱 「칙」 앞머리의 중심 Hz ·
+  /// [spark] 금속 클러스터를 이만큼 높이 올려(배수) 8kHz 위 배음을 늘린다.
+  /// 0 보다 크면 새 경로(고역 10~16kHz 금속성 살림)가 켜진다. 2026-10-01.
+  final double air, snap, spark;
+  const HatK(
+    this.hi,
+    this.rel,
+    this.tune,
+    this.metal,
+    this.noise, {
+    this.air = 0,
+    this.snap = 0,
+    this.spark = 1,
+  });
 }
 
 class TomK {
@@ -83,7 +107,10 @@ class RimK {
 class ClapK {
   final int n;
   final double spread, bp, q, rel, tail;
-  const ClapK(this.n, this.spread, this.bp, this.q, this.rel, this.tail);
+
+  /// 박수 첫 손바닥의 「짝」 — 고역 셸프(dB)와 짧은 감쇠를 더한다(0 = 예전 소리 그대로).
+  final double snap;
+  const ClapK(this.n, this.spread, this.bp, this.q, this.rel, this.tail, {this.snap = 0});
 }
 
 class ShakeK {
@@ -154,29 +181,29 @@ const Map<String, DrumKit> DRUM_KITS = {
   ),
   'k808': DrumKit(
     label: '808',
-    kick: KickK(120, 26, 0.62, 0.048, 0.40, 1800, 0.10, 0.50),
-    snare: SnareK(210, 0, 2000, 0.38, 4200, 0.70, 1.4, 2),
-    hat: HatK(8600, 0.038, 1.00, 0.85, 0.45),
+    kick: KickK(120, 26, 0.62, 0.048, 0.40, 1800, 0.10, 0.50, snap: 2.2),
+    snare: SnareK(210, 0, 2000, 0.38, 4200, 0.70, 1.4, 2, crack: 0.8),
+    hat: HatK(10500, 0.038, 1.00, 0.85, 0.55, air: 5, snap: 9500, spark: 2.0),
     tom: TomK(0.80, 0.45, 2, 0.08),
     crash: CrashK(1.10, 4600, 1.06, 0.75, 0.60),
     ride: RideK(0.75, 4200, 1.06, 0.28),
     rim: RimK(2100, 0.026, 0.30, 0.30),
-    clap: ClapK(3, 0.009, 1500, 1.4, 0.13, 0.22),
+    clap: ClapK(3, 0.009, 1500, 1.4, 0.13, 0.22, snap: 7),
     shake: ShakeK(7000, 10000, 0.032),
     // 808 카우벨은 상징이라 길게
     cow: CowK(540, 800, 0.30, 2640),
   ),
   'k909': DrumKit(
     label: '909',
-    kick: KickK(200, 46, 0.50, 0.018, 0.88, 3200, 0.32, 0.18),
-    snare: SnareK(200, 360, 1600, 0.55, 3900, 1.25, 2.8, 3),
-    hat: HatK(9000, 0.050, 1.03, 0.62, 0.80),
+    kick: KickK(200, 46, 0.50, 0.018, 0.88, 3200, 0.32, 0.18, snap: 2.2),
+    snare: SnareK(200, 360, 1600, 0.55, 3900, 1.25, 2.8, 3, crack: 0.6),
+    hat: HatK(10000, 0.050, 1.03, 0.62, 0.95, air: 5, snap: 9500, spark: 2.0),
     tom: TomK(1.05, 0.32, 3, 0.14),
     crash: CrashK(1.35, 4000, 1.03, 0.68, 0.90),
     ride: RideK(0.85, 3800, 1.03, 0.34),
     rim: RimK(1900, 0.030, 0.40, 0.28),
     // 909 클랩 = 4연타 + 긴 꼬리
-    clap: ClapK(4, 0.0085, 1200, 0.9, 0.20, 0.42),
+    clap: ClapK(4, 0.0085, 1200, 0.9, 0.20, 0.42, snap: 6),
     shake: ShakeK(6600, 9400, 0.036),
     cow: CowK(560, 830, 0.18, 2700),
   ),
@@ -190,14 +217,14 @@ const Map<String, DrumKit> DRUM_KITS = {
     // 자동으로 이 값들로 떨어진다(`drums.dart` 의 `trigger()` 참고).
     sampled: true,
     label: '로파이',
-    kick: KickK(150, 42, 0.50, 0.036, 0.44, 1600, 0.38, 0.18),
-    snare: SnareK(176, 300, 900, 0.55, 2400, 0.75, 1.6, 6),
-    hat: HatK(5200, 0.046, 0.97, 0.25, 1.00),
+    kick: KickK(150, 42, 0.50, 0.036, 0.44, 1600, 0.38, 0.18, snap: 1.6),
+    snare: SnareK(176, 300, 900, 0.55, 2400, 0.75, 1.6, 6, crack: 0.6),
+    hat: HatK(8000, 0.046, 0.97, 0.45, 0.80, air: 3, snap: 8000, spark: 1.6),
     tom: TomK(0.95, 0.34, 6, 0.22),
     crash: CrashK(1.20, 2600, 0.96, 0.35, 1.00),
     ride: RideK(0.80, 2600, 0.96, 0.22),
     rim: RimK(1550, 0.042, 0.65, 0.18),
-    clap: ClapK(3, 0.013, 1050, 0.9, 0.18, 0.34),
+    clap: ClapK(3, 0.013, 1050, 0.9, 0.18, 0.34, snap: 4),
     shake: ShakeK(4800, 7200, 0.044),
     cow: CowK(510, 760, 0.16, 2300),
   ),
@@ -730,8 +757,19 @@ class DrumVoice {
         [(b) => b.highpass(k.clickHz * (0.82 + 0.27 * vr) * _hit.tone, 0)],
         a: 0.0004,
         h: 0.002,
-        r: 0.016,
+        r: k.snap > 0 ? 0.010 : 0.016,
         peak: k.click * (0.24 + 0.39 * vr) * v * _hit.amp,
+      );
+    }
+    if (k.snap > 0) {
+      // 비터의 날카로운 「딱」 — 3.5ms 만 나고 사라진다. 서브(둥)와 시간이 갈려서
+      // 킥이 뭉개지지 않고 앞머리가 또렷하게 선다.
+      _addNoise(
+        [(b) => b.bandpass(k.clickHz * 1.35 * (0.9 + 0.2 * vr) * _hit.tone, 0.7)],
+        a: 0.00015,
+        h: 0.0006,
+        r: 0.0035,
+        peak: k.snap * (0.45 + 0.55 * vr) * v * _hit.amp,
       );
     }
     active = true;
@@ -757,6 +795,19 @@ class DrumVoice {
       brightMul: (0.70 + 0.45 * vr) * _hit.tone,
       relMul: _hit.rel,
     );
+    if (k.crack > 0) {
+      // 스틱이 헤드에 닿는 순간의 「탁」 — 줄 소리(와이어)와 별개로 4ms 만 난다.
+      _addNoise(
+        [
+          (b) => b.highpass(2200 * _hit.tone, 0),
+          (b) => b.bandpass(k.bright * 1.35 * (0.8 + 0.3 * vr) * _hit.tone, 0.6),
+        ],
+        a: 0.00012,
+        h: 0.0006,
+        r: 0.0045,
+        peak: k.crack * (0.45 + 0.55 * vr) * v * _hit.amp,
+      );
+    }
     // 몸통을 바로 감쇠시키면 타점은 살아나지만 **두께가 얇아진다**(150~400Hz 가
     // 34% → 29% 로 빠졌다). 그만큼 몸통 크기를 올려서 되찾는다.
     for (final t in [
@@ -806,16 +857,21 @@ class DrumVoice {
     // 살짝 스치면 심벌의 높은 모드가 아예 안 깨어난다 — 그래서 어둡다.
     // 세기로 **열리는 로우패스**가 그 차이를 낸다(하이패스 모서리만 움직여서는
     // 잡음이 워낙 넓어서 밝기가 거의 안 변한다).
-    final lo = (7000 + 13000 * vr) * _hit.tone;
+    // air>0(합성 킷의 「칫칫」 경로)이면 천장을 거의 열어 둔다 — 15.7kHz(세기 2)에서
+    // 막으면 12~16kHz 「치익」이 잘려 나가 띳띳해진다.
+    final bright = k.air > 0;
+    final lo = bright
+        ? math.min(21000.0, (14000 + 8000 * vr) * _hit.tone)
+        : (7000 + 13000 * vr) * _hit.tone;
 
     // ── ① 스틱이 금속을 때리는 '칙' ── (5단계 53/N)
     // 2~3ms 짜리 앞머리. 이게 없으면 뒤의 잡음만 남아서 **셰이커처럼** 들린다.
     _addNoise(
-      [(b) => b.bandpass(3600 * _hit.tone, 1.0)],
+      [(b) => b.bandpass((bright ? k.snap : 3600) * _hit.tone, bright ? 0.6 : 1.0)],
       a: 0.0003,
       h: 0.001,
-      r: 0.009,
-      peak: 0.32 * v * _hit.amp,
+      r: bright ? 0.0065 : 0.009,
+      peak: (bright ? 0.40 : 0.32) * v * _hit.amp,
     );
 
     // ── ② 몸통(잡음) ──
@@ -824,7 +880,11 @@ class DrumVoice {
     // (사용자 지적: "하이햇 개선 요망").
     if (k.noise > 0) {
       _addNoise(
-        [(b) => b.highpass(hi, 0), (b) => b.lowpass(lo, 0)],
+        [
+          (b) => b.highpass(hi, 0),
+          (b) => b.lowpass(lo, 0),
+          if (bright) (b) => b.highShelf(10000, k.air),
+        ],
         a: 0.0006,
         h: 0.005,
         r: rel,
@@ -838,9 +898,9 @@ class DrumVoice {
     // 서로 안 맞는(비배음) 여섯 개를 겹쳐 만든 쇳소리. 비중을 세 배로 올렸다.
     if (k.metal > 0) {
       _metalCluster(
-        k.tune * _hit.pitch,
+        k.tune * k.spark * _hit.pitch,
         highQuality,
-        preFreq: hi * 0.72,
+        preFreq: hi * (bright ? 0.9 : 0.72),
         a: 0.0006,
         h: 0.004,
         // 열린 하이햇은 쇳소리가 잡음보다 오래 남는다(그게 '샤—' 하는 꼬리다)
@@ -986,10 +1046,13 @@ class DrumVoice {
       // 박수 자리가 달라졌다(Phase 1 결정성 시험에서 잡았다).
       final off = i * k.spread * (_varyOn ? 1 + _rnd2() * 0.12 : 1.0);
       _addNoise(
-        [(b) => b.bandpass(k.bp * _hit.tone, k.q)],
-        a: 0.0004,
+        [
+          (b) => b.bandpass(k.bp * _hit.tone, k.q),
+          if (k.snap > 0) (b) => b.highShelf(3000, k.snap),
+        ],
+        a: k.snap > 0 ? 0.0002 : 0.0004,
         h: 0.002,
-        r: 0.020,
+        r: k.snap > 0 ? (i == 0 ? 0.016 : 0.013) : 0.020,
         // **박수를 2배로 올렸다** (2026-08-31). 재 보니 스네어 대비 −13dB 이었다.
         // 박수만 뒷박을 치는 판이 여덟이나 된다(`House Chorus Plain`·`House Break`·
         // `City Break`·`Clap Beat`·`Perc Layer`·`Prog Groove`·`Jazz B`·`Gospel Break`).
