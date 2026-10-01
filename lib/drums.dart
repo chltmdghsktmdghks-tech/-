@@ -115,7 +115,7 @@ class DrumKit {
   final bool sampled;
 
   /// 어느 표본 세트를 쓰나(`drum_sampler.dart` 의 `kDefaultDrumSet` 참고).
-  /// 되돌리려면 `'avirt'` → `'drum'` 한 줄.
+  /// 되돌리려면 `'unruly'` → `'avirt'`(재즈 킷, `ajazz` 키트와 같음) 또는 `'drum'` 한 줄.
   final String sampleSet;
   const DrumKit({
     required this.label,
@@ -137,9 +137,9 @@ class DrumKit {
 const Map<String, DrumKit> DRUM_KITS = {
   'acoustic': DrumKit(
     sampled: true,
-    // 2026-09-29: virtuosity_drums(44.1kHz, CC0)가 기본. 예전 MuldjordKit 은
-    // 'amuld' 키트로 남겨 둔다(A/B·되돌리기).
-    sampleSet: 'avirt',
+    // 2026-10-01: Unruly Drums(록 킷, 44.1kHz, CC0)가 기본 — 재즈 킷(virtuosity)은
+    // 펀치·현대감이 없다는 지적. 재즈 킷은 'ajazz', 예전 MuldjordKit 은 'amuld' 로 남긴다.
+    sampleSet: 'unruly',
     label: '어쿠스틱',
     kick: KickK(180, 48, 0.40, 0.028, 0.62, 2800, 0.26, 0.18),
     snare: SnareK(188, 332, 1300, 0.52, 3600, 1.00, 2.2, 5),
@@ -203,6 +203,7 @@ const Map<String, DrumKit> DRUM_KITS = {
   ),
   'rock': DrumKit(
     sampled: true,
+    sampleSet: 'unruly',
     label: '록',
     kick: KickK(190, 52, 0.54, 0.022, 0.76, 3000, 0.30, 0.16),
     snare: SnareK(196, 352, 1700, 0.62, 3700, 1.15, 3.0, 6),
@@ -214,6 +215,22 @@ const Map<String, DrumKit> DRUM_KITS = {
     clap: ClapK(3, 0.012, 1400, 1.0, 0.19, 0.32),
     shake: ShakeK(6200, 9000, 0.042),
     cow: CowK(560, 820, 0.16, 2700),
+  ),
+  'ajazz': DrumKit(
+    sampled: true,
+    // 2026-09-29 의 기본이던 virtuosity_drums(재즈, 스틱·펠트 비터) — 2026-10-01 에 acoustic 이 unruly 로 바뀌며 이름을 붙여 남김.
+    sampleSet: 'avirt',
+    label: '재즈',
+    kick: KickK(180, 48, 0.40, 0.028, 0.62, 2800, 0.26, 0.18),
+    snare: SnareK(188, 332, 1300, 0.52, 3600, 1.00, 2.2, 5),
+    hat: HatK(7000, 0.058, 1.00, 0.30, 1.00),
+    tom: TomK(1.00, 0.36, 5, 0.12),
+    crash: CrashK(1.60, 3400, 1.00, 0.55, 1.00),
+    ride: RideK(1.00, 3200, 1.00, 0.40),
+    rim: RimK(1750, 0.038, 0.55, 0.22),
+    clap: ClapK(3, 0.011, 1350, 1.1, 0.17, 0.30),
+    shake: ShakeK(6000, 8800, 0.040),
+    cow: CowK(540, 800, 0.15, 2640),
   ),
   // 예전 어쿠스틱(MuldjordKit, 22.05kHz) — 새 기본(acoustic)과 비교·복구용.
   'amuld': DrumKit(
@@ -238,6 +255,7 @@ const List<String> DRUM_KIT_ORDER = [
   'k909',
   'lofi',
   'rock',
+  'ajazz',
   'amuld',
 ];
 

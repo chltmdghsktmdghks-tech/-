@@ -24,7 +24,9 @@ import 'sampler.dart' show SampleClip, parseSampleWav;
 
 /// 표본 세트 — 폴더 앞머리(`assets/samples/<세트>_<조각>/`)다.
 ///  - `drum`  : FreePats MuldjordKit (22.05kHz, CC BY 4.0) — 기존, 지우지 않는다.
-///  - `avirt` : sfzinstruments/virtuosity_drums `mid` 마이크 (44.1kHz, CC0-1.0).
+///  - `avirt` : sfzinstruments/virtuosity_drums `mid` 마이크 (44.1kHz, CC0-1.0) — 재즈 킷.
+///  - `unruly`: sfzinstruments/karoryfer.unruly-drums (44.1kHz, CC0-1.0) — 록 킷, 멀티마이크를
+///    모노로 섞음. 2026-10-01: 재즈 킷이 펀치·현대감이 없다는 지적으로 `acoustic`/`rock` 의 기본.
 ///    2026-09-29 — 22.05kHz 표본은 11kHz 위가 통째로 없어 "형편없이" 들렸다.
 const String kDefaultDrumSet = 'drum';
 
@@ -49,6 +51,15 @@ const Map<String, Map<String, int>> _kDrumRRCount = {
     'ride': 2,
     // 톰은 [낮은 톰, 높은 톰] 두 벌을 번갈아(무작위) 친다 — 원음 그대로.
     'tom': 2,
+  },
+  'unruly': {
+    'kick': 3,
+    'snare': 4,
+    'hatClosed': 4, // 자주 반복되는 조각은 벌을 더 둔다(기계총 방지)
+    'hatOpen': 2,
+    'crash': 2,
+    'ride': 2,
+    'tom': 2, // [낮은 톰(14" 스네어 와이어 푼 것), 높은 톰(13", +4반음)]
   },
 };
 
@@ -78,11 +89,34 @@ const Map<String, Map<String, double>> kDrumSetTrim = {
   },
 };
 
+/// unruly 세트 — 재즈 킷(avirt)과 같은 크기 선으로 맞춘다(2026-10-01, 100ms RMS 기준:
+/// 킥 v3 -15, 스네어 v3 -16, 톰 v3 -13, 하이햇 닫힘 v2 -30 / 열림 v3 -23).
+/// 원본 마이크 섞음이 훨씬 커서 하이햇은 크게 내리고(-11dB), 킥은 살짝 올린다. 크래시·라이드는
+/// RMS 를 재즈 킷에 맞추면 피크가 천장에 닿아(크레스트 20~28dB) 피크 기준으로 둔다.
+/// 표: `test/drum_set_level_test.dart`.
+const Map<String, double> _kUnrulyTrim = {
+  'kick': 1.19, // +1.5dB (피크가 천장 0.89 에 닿지 않는 선)
+  'snare': 1.0,
+  'tom': 1.0,
+  'crash': 1.0, // 긴 꼬리라 RMS 는 재즈 킷보다 낮지만(-20 vs -16) 피크가 이미 -1~-3dB — 올리지 않는다
+  'ride': 0.95, // -0.4dB — RMS 맞추려 올리면 피크가 천장(-0.7dB)에 닿았다(크레스트 28dB)
+  'hatClosed': 0.28, // -11dB (표본이 밝고 커서)
+  'hatOpen': 0.60, // -4.4dB
+};
+
+/// unruly 세기 층 보정 — 원본 층 간격이 재즈 킷보다 좁은 조각만 여린 쪽을 더 낮춘다.
+const Map<String, Map<int, double>> _kUnrulyVelGain = {
+  'kick': {1: 0.5, 2: 1.0, 3: 1.0},
+  'snare': {1: 0.55, 2: 0.70, 3: 1.0},
+  'tom': {1: 1.0, 2: 0.75, 3: 1.0},
+  'hatClosed': {1: 0.8, 2: 1.0, 3: 1.0},
+};
+
 /// 킥 비터 클릭 합성 겹침 세기(표본 킥 진폭 대비) — 세트별. 없으면 안 얹는다.
 /// 2026-09-29: avirt 킥(펠트 비터 재즈 킥)은 클릭이 거의 없어 얹는다.
 /// 값은 앞 20ms 의 2-6kHz 비율이 예전 세트(≈2.5%) 수준이 되게 잰 것 —
 /// `test/drum_set_level_test.dart`. 끄려면 0 대신 항목을 지운다.
-const Map<String, double> kDrumKickClick = {'avirt': 0.20};
+const Map<String, double> kDrumKickClick = {'avirt': 0.20, 'unruly': 0.5};
 const double kDrumKickClickSec = 0.006;
 const double kDrumKickClickTau = 0.0009;
 
@@ -93,6 +127,7 @@ const double kDrumKickClickTau = 0.0009;
 /// 크래시·라이드는 원본 세기 층이 좁아(크래시 11dB · 라이드 mf/ff 는 같은 층)
 /// 여린 쪽만 조금 낮춘다.
 double? drumSetVelGain(String set, int vel, [String piece = '']) {
+  if (set == 'unruly') return _kUnrulyVelGain[piece]?[vel] ?? 1.0;
   if (set != 'avirt') return null;
   if (piece == 'crash' || piece == 'ride') {
     return const {1: 0.5, 2: 0.75, 3: 1.0}[vel] ?? 1.0;
@@ -111,7 +146,8 @@ const double kDrumBrightCutHz = 3500.0;
 
 double drumSetBright(String set, String piece) => kDrumSetBright[set]?[piece] ?? 0.0;
 
-double drumSetTrim(String set, String piece) => kDrumSetTrim[set]?[piece] ?? 1.0;
+double drumSetTrim(String set, String piece) =>
+    set == 'unruly' ? (_kUnrulyTrim[piece] ?? 1.0) : (kDrumSetTrim[set]?[piece] ?? 1.0);
 
 /// 이 세트의 조각이 음정 이동(톰 피치)을 쓰는가.
 double? drumRootFreq(String piece, String set) =>

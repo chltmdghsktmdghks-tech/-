@@ -63,6 +63,7 @@ void main() {
     for (final p in ['kick', 'snare', 'hatClosed', 'hatOpen', 'crash', 'ride', 'tom']) {
       await ensureDrumPieceLoaded(p);
       await ensureDrumPieceLoaded(p, set: 'avirt');
+      await ensureDrumPieceLoaded(p, set: 'unruly');
     }
   });
 

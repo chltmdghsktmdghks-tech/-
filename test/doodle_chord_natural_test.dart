@@ -11,14 +11,16 @@ void main() {
         final plan = DoodleChordPlan(
           [for (var i = 0; i < 4; i++) const DoodleChordPick(0)],
           mode: mode,
+          spb: 16,
+          beatSteps: 4,
           genre: 'jazz',
           rng: _FixedRng(salt),
         );
         // 0마디 착지 = 긴장 → 1마디가 딴 코드(V7·세컨더리 등)
-        plan.recordTap(0, dir: -1, color: 0);
+        plan.recordTap(0, dir: -1, sub: false);
         final b1 = plan.pickAt(1);
         // 1마디 착지 = 가운데(0)
-        plan.recordTap(1, dir: 0, color: 0);
+        plan.recordTap(1, dir: 0, sub: false);
         final b2 = plan.pickAt(2);
         if (b1.type == 'dom7') {
           expect(b2, doodleResolveDom(b1),
@@ -38,13 +40,15 @@ void main() {
           DoodleChordPick(0),
         ],
         mode: 'major',
+        spb: 16,
+        beatSteps: 4,
         genre: 'jazz',
         rng: _FixedRng(salt),
       );
-      plan.recordTap(0, dir: -1, color: 0);
+      plan.recordTap(0, dir: -1, sub: false);
       final pv = plan.previewNext(0);
       expect(plan.pickAt(1), pv);
-      plan.recordTap(1, dir: 0, color: 0);
+      plan.recordTap(1, dir: 0, sub: false);
       final pv2 = plan.previewNext(1);
       expect(plan.pickAt(2), pv2);
     }

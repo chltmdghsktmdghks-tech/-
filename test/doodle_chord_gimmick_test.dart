@@ -137,30 +137,31 @@ void main() {
     });
   });
 
-  group('상하 = 두 구역 (위 화려 / 아래 담백)', () {
+  group('상하 = 두 구역 (위 대체코드 / 아래 원래 코드)', () {
     test('한가운데 한 줄로 갈린다', () {
-      expect(doodleColorOfY(0.0), 1);
-      expect(doodleColorOfY(0.49), 1);
-      expect(doodleColorOfY(0.5), 0);
-      expect(doodleColorOfY(1.0), 0);
+      expect(doodleSubOfY(0.0), isTrue);
+      expect(doodleSubOfY(0.49), isTrue);
+      expect(doodleSubOfY(0.5), isFalse);
+      expect(doodleSubOfY(1.0), isFalse);
     });
-    test('뿌리는 색이 바뀌어도 그대로 — 다른 코드 고르기가 아니다', () {
+    test('두께(color)는 같은 코드의 소리 두께일 뿐 — 뿌리는 그대로', () {
       for (var d = 0; d < 7; d++) {
         for (final key in [cMajor, aMinor]) {
           final roots = {
-            for (final c in [0, 1])
+            for (final c in [0, 1, 2])
               doodleChordSpec(key, DoodleChordPick(d), c).root,
           };
-          expect(roots.length, 1, reason: '도수 $d 의 뿌리가 색에 따라 달라짐');
+          expect(roots.length, 1, reason: '도수 $d 의 뿌리가 두께에 따라 달라짐');
         }
       }
     });
-    test('C장조 I: 담백 C, 화려 CM7. V7 자리는 담백 G7, 화려 G9', () {
+    test('C장조 I: 3화음 C, 7th CM7, 9th CM9. V7 자리는 G7 · G7 · G9', () {
       String n(DoodleChordPick p, int c) => doodleChordName(doodleChordSpec(cMajor, p, c));
       expect(n(const DoodleChordPick(0), 0), 'C');
       expect(n(const DoodleChordPick(0), 1), 'CM7');
       expect(n(const DoodleChordPick(4, 'dom7'), 0), 'G7');
-      expect(n(const DoodleChordPick(4, 'dom7'), 1), 'G9');
+      expect(n(const DoodleChordPick(4, 'dom7'), 1), 'G7');
+      expect(n(const DoodleChordPick(4, 'dom7'), 2), 'G9');
     });
   });
 
@@ -214,16 +215,18 @@ void main() {
     DoodleChordPlan mk() => DoodleChordPlan(
       const [DoodleChordPick(0), DoodleChordPick(4), DoodleChordPick(5), DoodleChordPick(3)],
       mode: 'major',
+      spb: 16,
+      beatSteps: 4,
       rng: math.Random(1),
     );
     test('친 게 없거나 가운데면 깔린 진행 그대로', () {
       final c = mk();
-      c.recordTap(0, dir: 0, color: 0);
+      c.recordTap(0, dir: 0, sub: false);
       expect([for (var b = 0; b < 4; b++) c.pickAt(b)], c.base);
     });
     test('마디 0 의 마지막 탭이 오른쪽이면 마디 1 만 해결 쪽으로 바뀐다', () {
       final c = mk();
-      c.recordTap(0, dir: 1, color: 0);
+      c.recordTap(0, dir: 1, sub: false);
       final b1 = c.pickAt(1);
       expect(b1, isNot(c.base[1]));
       expect([0, 5, 3].contains(b1.degree), isTrue, reason: 'I 의 해결 후보(vi/IV)');
@@ -231,26 +234,26 @@ void main() {
     });
     test('처음 탭이 왼쪽이어도 마지막(착지) 탭이 이긴다', () {
       final c = mk();
-      c.recordTap(0, dir: -1, color: 2);
-      c.recordTap(0, dir: 0, color: -1); // 착지 탭: 가운데, 차분
-      expect(c.pickAt(1), c.base[1], reason: '착지가 가운데면 안 바뀐다');
-      expect(c.colorOf(0), -1, reason: '그 마디 기록 색은 착지 탭 기준');
+      c.recordTap(0, dir: -1, sub: true);
+      c.recordTap(0, dir: 0, sub: false); // 착지 탭: 가운데, 원래 코드
+      expect(c.pickAt(1), c.base[1], reason: '착지가 가운데·원래 코드면 안 바뀐다');
+      expect(c.landSubOf(0), isFalse, reason: '그 마디의 대체 여부는 착지 탭 기준');
     });
     test('바뀐 마디가 그 뒤 마디의 출발점이 된다', () {
       final c = mk();
-      c.recordTap(0, dir: -1, color: 0);
-      c.recordTap(1, dir: 1, color: 0);
+      c.recordTap(0, dir: -1, sub: false);
+      c.recordTap(1, dir: 1, sub: false);
       final b1 = c.pickAt(1);
       final b2 = c.pickAt(2);
       expect(b2, isNot(b1));
     });
     test('reset 은 깔린 진행과 손짓 기록을 되돌린다', () {
       final c = mk();
-      c.recordTap(0, dir: 1, color: 2);
+      c.recordTap(0, dir: 1, sub: true);
       c.pickAt(3);
       c.reset();
       expect(c.plan, c.base);
-      expect(c.colorOf(0), 0);
+      expect(c.landSubOf(0), isFalse);
     });
   });
 
@@ -320,8 +323,10 @@ void main() {
 
     testWidgets('세로는 위·아래 두 구역만 — 라벨 둘, 가운데 선', (tester) async {
       await open(tester);
-      expect(find.textContaining('위 · 화려하게'), findsOneWidget);
-      expect(find.textContaining('아래 · 담백하게'), findsOneWidget);
+      expect(find.textContaining('위 · 대체'), findsOneWidget);
+      expect(find.textContaining('아래 · 원래'), findsOneWidget);
+      expect(find.textContaining('화려'), findsNothing, reason: '옛 해석(화려/담백)은 없어졌다');
+      expect(find.textContaining('담백'), findsNothing);
       expect(find.text('화려'), findsNothing, reason: '3구역 옛 라벨은 없어졌다');
       expect(find.text('차분'), findsNothing);
     });

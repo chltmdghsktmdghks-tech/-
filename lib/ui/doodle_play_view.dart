@@ -207,8 +207,12 @@ class _Finger {
   /// 롤 크레셴도의 지금 단계(0~2) — 경계에서 흔들려도 안 튀게 직전 단계를 기억한다.
   int rollBump = 0;
 
-  /// 코드: 이 탭이 정한 진행 방향(−1·0·+1)과 색(1=위 화려·0=아래 담백) — 화면 표시용.
+  /// 코드: 이 탭이 정한 진행 방향(−1·0·+1)과 구역(color 1=위 대체코드·0=아래 원래 코드) — 화면 표시용.
   int dir = 0, color = 0;
+
+  /// 코드: 「빠르게 두 번 쳐서」 반박 자리로 **옮겨 적은** 탭의 기록 위치(루프 안 0~1). 보통은 null.
+  /// 떼는 순간(`_pressUp`)에도 이 위치로 닫아야 한다 — 실제 위치로 닫으면 시작보다 앞서 한 바퀴 길이로 샌다.
+  double? recPos;
 
   /// 하이햇 지금 구역(`kHatBand16`·`kHatBand8`·`kHatBandOpen`) — 경계에서 흔들려도 안 튀게
   /// 직전 구역을 기억하고, 바뀌는 순간에만 손끝으로 알린다. null 이면 아직 안 읽었다.
@@ -447,6 +451,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
 
   final math.Random _rng = math.Random();
 
+  /// 이번 판에서 **코드를 친 칸들**(머리·반박 모두) — 반박 코드는 같은 박의 머리가 쳐져 있어야
+  /// 받는다(`DoodleChordPlan.isHalfChord`). 다시 녹음하면 비운다.
+  final Set<int> _chordTapAt = {};
+
+  /// 직전 코드 탭의 칸·시각 — 「빠르게 두 번」(같은 칸으로 반올림되는 두 탭)을 반박으로 옮기려고.
+  int? _chordPrevStep;
+  DateTime? _chordPrevAt;
+
   /// 방금 친 코드 이름·가장 최근 좌우 방향 — 은은한 힌트(색·화살표)와 이름표용.
   ChordSpec? _lastSpec;
   int _lastDir = 0;
@@ -666,6 +678,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       ),
       mode: widget.transport.mode,
       genre: p.genre,
+      // 반박 코드는 박자표를 따른다 — 마디 칸 수·한 박 칸 수를 빠짐없이 넘긴다(기본값 없음).
+      spb: p.spb,
+      beatSteps: doodleBeatSteps(p.meterDef),
       rng: _rng,
     );
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -1321,18 +1336,28 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     // [maps] 를 주면 **그 판을 칠 때 모아 둔 손짓**으로 적는다(베이스 음높이 다시 얹기) —
     // 안 주면 지금 판의 것.
     final m = maps ?? _TakeMaps(_velOf, _toneOf, _glideAt, _staccatoAt);
+    // 코드: 칠해진 칸 전부 — 어느 칸이 「같은 박의 머리를 가진 반박」인지 가린다(`isHalfChord`).
+    final tapped = chord ? {for (final r in rows) r[1] as int} : const <int>{};
+    final halfOff = doodleHalfOffset(_cp.beatSteps);
     return [
       for (final r in rows)
         () {
           final step = r[1] as int;
-          final len = m.stac.contains(step) ? 1 : r[2];
+          var len = m.stac.contains(step) ? 1 : r[2];
           final vel = m.vel[step] ?? r[3];
           if (chord) {
-            // 도수·종류는 **마디 단위**로 정리한다 — 그 마디에 깔린 코드 + 그 마디
-            // **착지 탭**의 색. 탭마다 색이 다르면 한 마디 안에서 들쭉날쭉해진다.
+            // 도수·종류는 **마디 단위**로 정리한다 — 그 마디에 깔린 코드(착지 탭이 위쪽이면 대체코드).
+            // 반박 자리(같은 박의 머리가 쳐져 있다)는 따로 정한 **반박 코드**다.
             final bar = _barOf(step);
-            final pick = _cp.pickAt(bar);
-            final ty = doodleChordText(_key, pick, _cp.colorOf(bar));
+            final isHalf = _cp.isHalfChord(step, tapped);
+            final pick = isHalf ? _cp.halfChordAt(step) : _cp.pickAt(bar);
+            // 머리 음은 반박에서 끊는다 — 안 끊으면 앞 코드가 반박 코드 위로 겹쳐 울린다.
+            if (!isHalf && tapped.contains(step + halfOff) &&
+                doodleIsHalfSlot(step + halfOff, spb: _cp.spb, beatSteps: _cp.beatSteps) &&
+                (len as int) > halfOff) {
+              len = halfOff;
+            }
+            final ty = doodleChordText(_key, pick, _cp.color);
             // 전위 칸은 **비운다** — 재생(`buildChordPattern`)이 `voiceLead` 로 앞 코드와
             // 공통음을 살려 잇는다. 연주 중에도 같은 함수로 잇는다(`_chordDown`).
             // 기타를 **톡** 쳐서(뮤트첩) 짧게 끊은 칸은 여리게 적는다 — 재생도 「척」으로 나게.
@@ -1567,7 +1592,21 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       _lastRowMs = nowMs;
     }
     final tone = _hasTone ? _kLadderTone[zone] : 0;
-    final step = rec?.stepOf(pos) ?? 0;
+    var step = rec?.stepOf(pos) ?? 0;
+    // 코드: 「빠르게 두 번」 — 같은 칸으로 반올림된 두 번째 탭은 같은 박의 반박 자리로 옮겨 적는다.
+    // (옮기지 않으면 `TapRecorder` 가 '판:칸' 키로 덮어써서 두 번째 탭이 조용히 사라진다.)
+    double? shiftedPos;
+    if (recording && rec != null && _stageDef.kind == DoodleKind.chord) {
+      final q = _chordQuickHalf(step, now);
+      if (q != null) {
+        step = q;
+        shiftedPos = doodlePosOfStep(
+          q,
+          loopSteps: (rec.loopBars > 0 ? rec.loopBars : rec.steps ~/ rec.spb) * rec.spb,
+          latencyFrac: rec.loopSec > 0 ? rec.latencySec / rec.loopSec : 0.0,
+        );
+      }
+    }
     final f = _Finger(
       pad: pad,
       downX: at.dx,
@@ -1578,10 +1617,11 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       step: step,
       frac: area.height <= 0 ? 0.5 : (at.dy / area.height).clamp(0.0, 1.0),
     );
+    f.recPos = shiftedPos;
     _fingers[pointer] = f;
     if (_hasTone) _rowVisitAt[zone] = now; // 사다리 궤적 — 첫 자리도 한 번 밝힌다.
     if (recording) {
-      rec?.down(pad, pos);
+      rec?.down(pad, shiftedPos ?? pos);
       _velOf[step] = vel;
       if (tone != 0) _toneOf[step] = tone;
     }
@@ -1738,16 +1778,34 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
   /// 판을 새로 시작한다 — 깔아 둔 기본 진행으로 되돌리고 손짓 기록을 비운다.
   void _resetChordPlan() {
     _cp.reset();
+    _chordTapAt.clear();
+    _chordPrevStep = null;
+    _chordPrevAt = null;
     _lastSpec = null;
     _lastDir = 0;
     _landBar = -1;
     _landPos = null;
-    _prevVoiced = doodleVoiceSeed(_key, _cp.base);
+    _prevVoiced = doodleVoiceSeed(_key, _cp.base, color: _cp.color);
+  }
+
+  /// 「빠르게 두 번」 쳤으면 반박 칸을 돌려준다(`doodleQuickHalfStep`) — 아니면 null.
+  int? _chordQuickHalf(int step, DateTime now) {
+    final at = _chordPrevAt;
+    return doodleQuickHalfStep(
+      step: step,
+      prevStep: _chordPrevStep,
+      sinceMs: at == null ? null : now.difference(at).inMilliseconds,
+      stepSec: _stepSec,
+      tapped: _chordTapAt,
+      spb: widget.project.spb,
+      beatSteps: _cp.beatSteps,
+    );
   }
 
   /// 코드 한 방 — **탭 = 리듬, 세기는 균일.** 어느 코드인지는 그 마디에 깔린 진행이,
-  /// 색은 **탭 순간의 세로 위치**가 정한다(즉시 들린다). 좌우는 소리를 안 바꾸고
-  /// 뒤 마디의 진행만 바꾼다 — 그 마디 **마지막 탭**의 자리가 남는다.
+  /// 위쪽(대체코드)·아래(원래 코드)는 **탭 순간의 세로 위치**가 정한다(즉시 들린다). 좌우는 소리를
+  /// 안 바꾸고 뒤 마디의 진행만 바꾼다 — 그 마디 **마지막 탭**의 자리가 남는다.
+  /// 같은 박의 머리를 이미 쳤고 이번 탭이 반박 자리면 **반박 코드**가 울린다.
   void _chordDown(
     int step,
     Offset at,
@@ -1756,8 +1814,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     required bool recording,
   }) {
     final bar = _barOf(step);
-    final pick = recording ? _cp.pickAt(bar) : _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
-    // 방향(좌·중·우 3구역)과 색(위·아래)은 경계에서 **직전 탭을 기억**한다(히스테리시스) —
+    // 방향(좌·중·우 3구역)과 대체(위·아래)는 경계에서 **직전 탭을 기억**한다(히스테리시스) —
     // 「마지막 탭이 다음 마디를 정한다」라서 경계에 걸친 탭이 반대쪽으로 읽히면 진행이 뒤집힌다.
     // 세로 경계는 엄지가 닿는 가운데 쪽으로 내렸다(`kChordColorSplit`).
     final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -1779,15 +1836,26 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
               slop: kBandSlopPx / area.height,
             ),
           );
+    final sub = color == 1; // 위쪽 = 대체코드
+    final half = recording && _cp.isHalfChord(step, _chordTapAt);
+    final DoodleChordPick pick;
+    if (half) {
+      pick = _cp.halfChordAt(step, dir: dir, sub: sub);
+    } else if (recording) {
+      pick = _cp.soundAt(bar, sub: sub);
+    } else {
+      pick = sub ? _cp.substituteOf(bar) : _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
+    }
     f.dir = dir;
     f.color = color;
     _flashAt = DateTime.now();
     _flashDir = dir;
     _flashColor = color;
-    var spec = doodleChordSpec(_key, pick, color);
+    final gc = _cp.color; // 장르가 정한 코드 두께 — 소리·적힌 것·이름표가 같은 값을 쓴다
+    var spec = doodleChordSpec(_key, pick, gc);
     // 록 기타의 파워코드 — 재생(`buildChordPattern` 의 plainType)과 같은 규칙.
-    // 종류를 안 적은 자리(=담백)만 스타일이 정한다.
-    final plain = doodleChordText(_key, pick, color) == null
+    // 종류를 안 적은 자리(=3화음)만 스타일이 정한다.
+    final plain = doodleChordText(_key, pick, gc) == null
         ? genreChordType(widget.project.genre, _chordTrack.voice)
         : null;
     if (plain != null) {
@@ -1842,7 +1910,14 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     _landPos = at;
     if (recording) {
       // 마지막에 친 탭이 이긴다 — 덮어쓰면 그게 곧 착지 탭이다.
-      _cp.recordTap(bar, dir: dir, color: color);
+      if (half) {
+        _cp.recordHalfTap(step, dir: dir, sub: sub);
+      } else {
+        _cp.recordTap(bar, dir: dir, sub: sub);
+      }
+      _chordTapAt.add(step);
+      _chordPrevStep = step;
+      _chordPrevAt = DateTime.now();
     }
   }
 
@@ -1959,7 +2034,8 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     // 스웰 손가락이 떼졌다 — 다음 코드·다른 트랙이 작게 들리지 않게 서서히 원래 크기로.
     if (f.swell) widget.host?.setSwell(kSwellBus, 1.0, smoothSec: 0.5);
     if (!f.swiped && recording) {
-      _rec?.up(f.pad, pos);
+      // 반박으로 옮겨 적은 탭은 시작 위치로 닫는다(최소 길이) — 실제 위치로 닫으면 되감겨 한 바퀴 길이가 된다.
+      _rec?.up(f.pad, f.recPos ?? pos);
       // **톡** 치면 짧게 — 시간 축이라 어느 손짓과도 안 겹친다.
       // `lenOf` 의 바닥값이 격자 한 단위(8분이면 2칸)라, 이게 없으면 아무리
       // 톡 쳐도 전부 8분이 되어 스타카토 베이스를 아예 못 만든다.
@@ -2306,8 +2382,20 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
   }
 
   @visibleForTesting
-  void debugTapChord(int bar, {required int dir, int color = 0}) =>
-      _cp.recordTap(bar, dir: dir, color: color);
+  void debugTapChord(int bar, {required int dir, bool sub = false}) =>
+      _cp.recordTap(bar, dir: dir, sub: sub);
+
+  /// 반박 자리 탭을 흉내 낸다(시계 없이). 머리 칸도 같이 쳐 둔 것으로 본다.
+  @visibleForTesting
+  void debugTapChordHalf(int step, {required int dir, bool sub = false}) {
+    _chordTapAt
+      ..add(step - doodleHalfOffset(_cp.beatSteps))
+      ..add(step);
+    _cp.recordHalfTap(step, dir: dir, sub: sub);
+  }
+
+  @visibleForTesting
+  DoodleChordPlan get debugPlan => _cp;
 
   @visibleForTesting
   List<List<Object?>> get debugBassNotes => _bassNotes;
@@ -2516,7 +2604,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
           part: kPartLive,
         );
       case DoodleKind.chord:
-        final spec = doodleChordSpec(_key, _cp.base.first, 0);
+        final spec = doodleChordSpec(_key, _cp.base.first, _cp.color);
         final guitar = isMuteVoice(_chordTrack.voice);
         final midi = guitar ? guitarChordMidi(spec) : chordMidiOf(spec);
         for (final m in midi) {
@@ -2891,9 +2979,9 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
 
   /// 좌우(진행 방향)·상하(색)가 뜻하는 것을 깐다(코드 단계만).
   ///  · 좌 1/3 찬색 = 긴장, 우 1/3 따뜻한색 = 해결, 가운데는 「그대로」.
-  ///  · 세로는 **한가운데 한 줄**로 위(화려)·아래(담백) 두 구역 — 미세 조준이 없다.
+  ///  · 세로는 **한가운데 한 줄**로 위(대체코드)·아래(원래 코드) 두 구역 — 미세 조준이 없다.
   ///  · 이 마디의 **착지 방향 쪽이 진하게** 켜져 있다(마디가 넘어가면 꺼진다).
-  /// 경계는 `doodleDirOfX`(1/3·2/3)·`doodleColorOfY`(1/2)와 같다 — 다르면 보이는 것과 나는
+  /// 경계는 `doodleDirOfX`(1/3·2/3)·`doodleSubOfY`(1/2)와 같다 — 다르면 보이는 것과 나는
   /// 소리가 어긋난다.
   Widget _chordZones(Size area) {
     final dir = _curDir();
@@ -2918,7 +3006,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
       child: Stack(
         children: [
           // 구역 색·경계선·맥박 치는 쐐기·탭 순간 번쩍임 — 한 장의 그림(60fps).
-          // 「긴장 = 왼쪽 · 해결 = 오른쪽 · 위 = 화려 · 아래 = 담백」이 처음 보는 사람에게도 보이게
+          // 「긴장 = 왼쪽 · 해결 = 오른쪽 · 위 = 대체코드 · 아래 = 원래 코드」가 처음 보는 사람에게도 보이게
           // 옅은 띠가 아니라 **움직이는 화살표**로 알린다(감사 2026-09-30: 제스처 존재를 몰랐다).
           Positioned.fill(
             child: CustomPaint(
@@ -2928,13 +3016,20 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
           ),
           label('◀ 긴장', Alignment.centerLeft, alpha: dir < 0 ? 0.7 : 0.3),
           label('해결 ▶', Alignment.centerRight, alpha: dir > 0 ? 0.7 : 0.3),
-          label('위 · 화려하게 (7th)', Alignment(0, upY)),
-          label('아래 · 담백하게', Alignment(0, downY)),
+          label('위 · 대체 ${_zoneName(sub: true)}', Alignment(0, upY)),
+          label('아래 · 원래 ${_zoneName(sub: false)}', Alignment(0, downY)),
           if (isSwellVoice(_chordTrack.voice))
             label('▲ 아래에서 위로 그으면 차올라요', const Alignment(0, 0.92), alpha: 0.32),
         ],
       ),
     );
+  }
+
+  /// 위/아래 구역 라벨에 적는 코드 이름 — 지금 마디에서 그 구역을 치면 울릴 코드.
+  String _zoneName({required bool sub}) {
+    final bar = _barNow().clamp(0, _cp.plan.length - 1);
+    final p = sub ? _cp.substituteOf(bar) : _cp.plan[bar];
+    return doodleChordName(doodleChordSpec(_key, p, _cp.color));
   }
 
   /// **지금 마디의 착지 방향**(-1/0/+1) — 이 마디에서 마지막으로 친 탭의 쪽. 마디가 넘어가면
@@ -2989,12 +3084,12 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
     }
     final bar = _barNow();
     final cur = _cp.plan[bar.clamp(0, _cp.plan.length - 1)];
-    final spec = _lastSpec ?? doodleChordSpec(_key, cur, 0);
+    final spec = _lastSpec ?? doodleChordSpec(_key, cur, _cp.color);
     final nextPick = _cp.previewNext(bar);
     final dir = _curDir();
     final nextName = nextPick == null
         ? '끝'
-        : doodleChordName(doodleChordSpec(_key, nextPick, 0));
+        : doodleChordName(doodleChordSpec(_key, nextPick, _cp.color));
     final tone = dir < 0 ? _kCool : (dir > 0 ? _kWarm : _stageColor());
     return Center(
       child: Column(
@@ -3332,7 +3427,7 @@ class _DoodlePlayViewState extends State<DoodlePlayView>
           '톡 치면 짧게, 잡으면 길게(오래 잡을수록 꼬리도 길게) · 잡은 채 위아래로 끌면 미끄러집니다',
     DoodleKind.chord =>
       '박자에 맞춰 톡톡 · 손가락 하나면 됩니다\n'
-          '마디의 마지막 탭이 다음 코드를 정해요 — 왼쪽 긴장 · 오른쪽 해결 · 위 화려 · 아래 담백'
+          '마디의 마지막 탭이 다음 코드를 정해요 — 왼쪽 긴장 · 오른쪽 해결 · 위 대체코드 · 아래 원래 코드'
           '${isSwellVoice(_chordTrack.voice) ? '\n아래에서 위로 그으면 볼륨이 차올라요(스웰)' : ''}'
           '${isMuteVoice(_chordTrack.voice) ? '\n아주 짧게 톡 떼면 줄을 덮는 뮤트 「척」' : ''}'
           '\n한 마디만 쳐 두면 안 친 뒷마디에 그 리듬이 이어져요',
@@ -4389,7 +4484,7 @@ class _ChordZonePainter extends CustomPainter {
       );
     }
 
-    // 경계선 — 위(화려)/아래(담백).
+    // 경계선 — 위(대체코드)/아래(원래 코드).
     canvas.drawLine(
       Offset(0, splitY),
       Offset(w, splitY),
@@ -4426,7 +4521,7 @@ class _ChordZonePainter extends CustomPainter {
     chevrons(true, _DoodlePlayViewState._kCool, landed < 0);
     chevrons(false, _DoodlePlayViewState._kWarm, landed > 0);
 
-    // 위·아래 화살 — 경계선 바로 위는 위(화려, 반짝), 아래는 아래(담백).
+    // 위·아래 화살 — 경계선 바로 위는 위(대체코드), 아래는 아래(원래 코드).
     final pulse = 0.5 + 0.5 * math.sin(now.millisecondsSinceEpoch / 300);
     final vp = Paint()
       ..style = PaintingStyle.stroke

@@ -74,9 +74,9 @@ void main() {
       '${kSampleBanks.keys}',
     );
     check(
-      '4) 어쿠스틱 킷(avirt 세트)을 썼으니 드럼 표본도 읽었다 (예전 세트는 안 읽음)',
-      kDrumSampleBanks.containsKey('avirt:kick') &&
-          kDrumSampleBanks.containsKey('avirt:tom') &&
+      '4) 어쿠스틱 킷(unruly 세트)을 썼으니 드럼 표본도 읽었다 (예전 세트는 안 읽음)',
+      kDrumSampleBanks.containsKey('unruly:kick') &&
+          kDrumSampleBanks.containsKey('unruly:tom') &&
           !kDrumSampleBanks.containsKey('kick'),
       '${kDrumSampleBanks.keys}',
     );

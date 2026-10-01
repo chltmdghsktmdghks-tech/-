@@ -338,6 +338,12 @@ class SynthNote {
       _cutFrom = math.min(16000.0, cutV * open);
       _cutTo = math.max(220.0, cutV * 0.64);
       _cutN = (math.max(0.04, dec) * kSampleRate).round();
+    } else if (PADSWELL[voice] != null) {
+      // 패드·현악: 필터가 서서히 열린다(`PADSWELL` 주석).
+      final sw = PADSWELL[voice]!;
+      _cutFrom = cutV * sw[0];
+      _cutTo = cutV * sw[1];
+      _cutN = (sw[2] * kSampleRate).round();
     } else {
       _cutFrom = cutV;
       _cutTo = cutV;

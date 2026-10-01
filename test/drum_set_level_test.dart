@@ -11,7 +11,13 @@ import 'package:music_doodle_engine/dsp.dart';
 import 'package:music_doodle_engine/synth.dart' show Human;
 
 const _pieces = ['kick', 'snare', 'hatClosed', 'hatOpen', 'crash', 'ride', 'tom'];
-const _sets = ['drum', 'avirt'];
+const _sets = ['drum', 'avirt', 'unruly'];
+
+/// 세트별 라운드로빈 벌 수(`drum_sampler.dart` `_kDrumRRCount` 와 같아야 한다).
+const _rr = {
+  'avirt': {'kick': 2, 'snare': 2, 'hatClosed': 2, 'hatOpen': 2, 'crash': 2, 'ride': 2, 'tom': 2},
+  'unruly': {'kick': 3, 'snare': 4, 'hatClosed': 4, 'hatOpen': 2, 'crash': 2, 'ride': 2, 'tom': 2},
+};
 
 double _db(double v) => v <= 1e-9 ? -120 : 20 * math.log(v) / math.ln10;
 
@@ -99,11 +105,13 @@ void main() {
 
   test('새 세트가 실제로 44.1kHz 로 읽힌다', () {
     for (final p in _pieces) {
-      final b = kDrumSampleBanks[drumBankKey(p, 'avirt')]!;
-      for (final v in [1, 2, 3]) {
-        expect(b.byVel[v]!.length, 2, reason: '$p v$v 라운드로빈 2벌');
-        for (final c in b.byVel[v]!) {
-          expect(c.sampleRate, 44100, reason: '$p v$v');
+      for (final set in ['avirt', 'unruly']) {
+        final b = kDrumSampleBanks[drumBankKey(p, set)]!;
+        for (final v in [1, 2, 3]) {
+          expect(b.byVel[v]!.length, _rr[set]![p], reason: '$set $p v$v 라운드로빈');
+          for (final c in b.byVel[v]!) {
+            expect(c.sampleRate, 44100, reason: '$set $p v$v');
+          }
         }
       }
       final old = kDrumSampleBanks[drumBankKey(p, 'drum')]!;
@@ -111,57 +119,103 @@ void main() {
     }
   });
 
-  test('새 어쿠스틱: 하이햇은 스네어보다 작고, 천장 아래, 고음이 산다', () {
+  test('재즈 킷(avirt): 하이햇은 스네어보다 작고, 천장 아래, 고음이 산다', () {
     for (final v in [1, 2, 3]) {
-      final sn = _peak(_hit('snare', 'acoustic', v, 1.5));
-      final hat = _peak(_hit('hat', 'acoustic', v, 1.5));
+      final sn = _peak(_hit('snare', 'ajazz', v, 1.5));
+      final hat = _peak(_hit('hat', 'ajazz', v, 1.5));
       expect(hat, lessThan(sn * 0.7), reason: 'hat v$v < snare v$v');
     }
     // 닫힌 하이햇(v2)이 들릴 만큼은 있다 — 예전엔 rms -44.6dB 로 묻혔다.
-    expect(_db(_rms100(_hit('hat', 'acoustic', 2, 1.0))), greaterThan(-40));
+    expect(_db(_rms100(_hit('hat', 'ajazz', 2, 1.0))), greaterThan(-40));
+    for (final i in ['kick', 'snare', 'hat', 'tom', 'crash', 'ride']) {
+      for (final v in [1, 2, 3]) {
+        expect(_peak(_hit(i, 'ajazz', v, 2.0)), lessThan(0.89), reason: '$i v$v 천장');
+      }
+    }
+    // 킥 비터 클릭 — 앞 20ms 의 2-6kHz 가 예전 세트(≈2.5%) 수준. 합성 클릭을
+    // 빼면 0.3% 로 떨어진다(펠트 비터 킥이라 원본엔 클릭이 없다).
+    expect(_bandRatio(_hit('kick', 'ajazz', 3, 1.0), 2000, 6000, len: 1024, hann: false),
+        greaterThan(0.015));
+    // 11kHz 위: 22.05kHz 표본엔 원래 없던 대역이다(하이햇·라이드에 뚜렷해야).
+    expect(_bandRatio(_hit('hat', 'ajazz', 2, 1.0), 11000, 24000), greaterThan(0.02));
+    expect(_bandRatio(_hit('ride', 'ajazz', 3, 2.0), 11000, 24000), greaterThan(0.05));
+  });
+
+  test('unruly(새 어쿠스틱): 천장 아래, 하이햇은 스네어보다 작고, 고음·펀치가 산다', () {
     for (final i in ['kick', 'snare', 'hat', 'tom', 'crash', 'ride']) {
       for (final v in [1, 2, 3]) {
         expect(_peak(_hit(i, 'acoustic', v, 2.0)), lessThan(0.89), reason: '$i v$v 천장');
       }
     }
-    // 킥 비터 클릭 — 앞 20ms 의 2-6kHz 가 예전 세트(≈2.5%) 수준. 합성 클릭을
-    // 빼면 0.3% 로 떨어진다(펠트 비터 킥이라 원본엔 클릭이 없다).
-    expect(_bandRatio(_hit('kick', 'acoustic', 3, 1.0), 2000, 6000, len: 1024, hann: false),
-        greaterThan(0.015));
-    // 11kHz 위: 22.05kHz 표본엔 원래 없던 대역이다(하이햇·라이드에 뚜렷해야).
-    expect(_bandRatio(_hit('hat', 'acoustic', 2, 1.0), 11000, 24000), greaterThan(0.02));
-    expect(_bandRatio(_hit('ride', 'acoustic', 3, 2.0), 11000, 24000), greaterThan(0.05));
+    // 크기 선 — 재즈 킷(2026-09-29 에 맞춘 선)에서 크게 벗어나지 않는다(100ms RMS, dB).
+    for (final i in ['kick', 'snare', 'tom']) {
+      final a = _db(_rms100(_hit(i, 'acoustic', 3, 2.0)));
+      final j = _db(_rms100(_hit(i, 'ajazz', 3, 2.0)));
+      expect((a - j).abs(), lessThan(3.0), reason: '$i v3 rms 새 $a 재즈 $j');
+    }
+    for (final v in [1, 2, 3]) {
+      final sn = _peak(_hit('snare', 'acoustic', v, 1.5));
+      final hat = _peak(_hit('hat', 'acoustic', v, 1.5));
+      expect(hat, lessThan(sn * 0.7), reason: 'hat v$v < snare v$v');
+    }
+    // 닫힌 하이햇(v2)이 묻히지 않는다(재즈 킷 -33dB 였음).
+    expect(_db(_rms100(_hit('hat', 'acoustic', 2, 1.0))), greaterThan(-36));
+    // 5kHz 위(치찰음·공기) — 재즈 킷 하이햇보다 밝고, 11kHz 위도 뚜렷하다.
+    expect(_bandRatio(_hit('hat', 'acoustic', 2, 1.0), 5000, 24000), greaterThan(0.6));
+    expect(_bandRatio(_hit('ride', 'acoustic', 3, 2.0), 5000, 24000), greaterThan(0.6));
+    // 킥 펀치 — (1) 앞 20ms 에 비터 대역(1~6kHz)이 1.5% 이상(표본 + 합성 클릭),
+    // (2) 꼬리가 재즈 킷보다 짧다(0.15~0.35s 구간 RMS / 최대 100ms RMS, dB).
+    final kAc = _hit('kick', 'acoustic', 3, 1.0), kJz = _hit('kick', 'ajazz', 3, 1.0);
+    expect(_bandRatio(kAc, 1000, 6000, len: 1024, hann: false), greaterThan(0.015));
+    double tail(Float64List x) {
+      var acc = 0.0;
+      final a = (0.15 * kSampleRate).round(), b = (0.35 * kSampleRate).round();
+      for (var i = a; i < b; i++) {
+        acc += x[i] * x[i];
+      }
+      return _db(math.sqrt(acc / (b - a))) - _db(_rms100(x));
+    }
+    expect(tail(kAc), lessThan(tail(kJz)), reason: '킥 꼬리 새 ${tail(kAc)} 재즈 ${tail(kJz)}');
+    // 스네어 크랙 — 1~6kHz 비율이 재즈 킷 이상.
+    double crack(String k) => _bandRatio(_hit('snare', k, 3, 1.0), 1000, 6000);
+    expect(crack('acoustic'), greaterThan(crack('ajazz')));
   });
 
+
   test('라운드로빈 — 같은 세기에서 서로 다른 녹음이 번갈아 나온다', () {
-    for (final p in _pieces) {
-      final b = kDrumSampleBanks[drumBankKey(p, 'avirt')]!;
-      for (final v in [1, 2, 3]) {
-        final a = b.byVel[v]![0].pcm, c = b.byVel[v]![1].pcm;
-        var diff = 0;
-        for (var i = 0; i < 2000 && i < a.length && i < c.length; i++) {
-          if (a[i] != c[i]) diff++;
+    for (final set in ['avirt', 'unruly']) {
+      for (final p in _pieces) {
+        final b = kDrumSampleBanks[drumBankKey(p, set)]!;
+        for (final v in [1, 2, 3]) {
+          final list = b.byVel[v]!;
+          for (var k = 1; k < list.length; k++) {
+            final a = list[0].pcm, c = list[k].pcm;
+            var diff = 0;
+            for (var i = 0; i < 2000 && i < a.length && i < c.length; i++) {
+              if (a[i] != c[i]) diff++;
+            }
+            expect(diff, greaterThan(100), reason: '$set $p v$v rr1 != rr${k + 1}');
+          }
         }
-        // 하이햇 닫힘 ff·라이드 ff 는 같은 층의 rr1/rr2 다(서로 다른 녹음).
-        expect(diff, greaterThan(100), reason: '$p v$v rr1 != rr2');
       }
     }
   });
 
   test('예전 세트는 amuld 킷으로 그대로 남아 있다(되돌리기)', () {
-    expect(DRUM_KITS['acoustic']!.sampleSet, 'avirt');
+    expect(DRUM_KITS['acoustic']!.sampleSet, 'unruly');
+    expect(DRUM_KITS['rock']!.sampleSet, 'unruly');
+    expect(DRUM_KITS['ajazz']!.sampleSet, 'avirt'); // 재즈 킷(2026-09-29 기본)
     expect(DRUM_KITS['amuld']!.sampleSet, 'drum');
-    expect(DRUM_KITS['rock']!.sampleSet, 'drum');
     expect(DRUM_KITS['lofi']!.sampleSet, 'drum');
   });
 
-  test('측정 표 (출력 = 예전 acoustic 대 새 acoustic)', () {
+  test('측정 표 (출력 = 재즈 ajazz 대 새 acoustic=unruly)', () {
     final o = StringBuffer('== 드럼 세트 비교 (48kHz 엔진 출력, 좌우합)\n');
-    o.writeln('조각      세기  |  예전(amuld) pk  rms  11k↑%  |  새(acoustic) pk  rms  11k↑%');
+    o.writeln('조각      세기  |  재즈(ajazz) pk  rms  11k↑%  |  새(acoustic) pk  rms  11k↑%');
     final insts = ['kick', 'snare', 'hat', 'tom', 'crash', 'ride'];
     for (final i in insts) {
       for (final v in [1, 2, 3]) {
-        final a = _hit(i, 'amuld', v, 2.0), b = _hit(i, 'acoustic', v, 2.0);
+        final a = _hit(i, 'ajazz', v, 2.0), b = _hit(i, 'acoustic', v, 2.0);
         String f(Float64List x) =>
             '${_db(_peak(x)).toStringAsFixed(1).padLeft(6)} ${_db(_rms100(x)).toStringAsFixed(1).padLeft(6)} '
             '${(_bandRatio(x, 11000, 24000) * 100).toStringAsFixed(2).padLeft(6)}';
@@ -169,7 +223,7 @@ void main() {
       }
     }
     // 킥 비터 클릭 — 앞 20ms 안의 2~6kHz 비율(공격 성분).
-    for (final k in ['amuld', 'acoustic']) {
+    for (final k in ['ajazz', 'acoustic']) {
       final x = _hit('kick', k, 3, 1.0);
       o.writeln('킥 v3 비터 대역(2-6k) 앞 20ms 비율 $k: '
           '${(_bandRatio(x, 2000, 6000, len: 1024, hann: false) * 100).toStringAsFixed(1)}%');

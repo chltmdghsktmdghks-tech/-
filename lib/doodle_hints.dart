@@ -48,7 +48,8 @@ List<DoodleCoachTip> doodleCoachTips(
     case 'chord':
       return [
         const DoodleCoachTip('↔', '마디의 마지막 탭이 왼쪽이면 다음 마디는 긴장, 오른쪽이면 해결'),
-        const DoodleCoachTip('↕', '위쪽을 치면 화려한 코드, 아래쪽은 담백한 코드'),
+        const DoodleCoachTip('↕', '위쪽을 치면 비슷한 다른 코드(대체코드), 아래쪽은 원래 코드 — 다음 코드도 따라 바뀌어요'),
+        const DoodleCoachTip('½', '한 박 안에서 박 머리를 치고 반박(박 사이)도 치면 반박에는 다른 코드가 들어가요'),
         if (swell) const DoodleCoachTip('↑', '아래에서 위로 그으면 볼륨이 차올라요'),
         if (mute) const DoodleCoachTip('×', '아주 짧게 톡 떼면 줄을 덮는 뮤트'),
       ];

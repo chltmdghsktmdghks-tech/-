@@ -107,6 +107,13 @@ flutter:
     - assets/samples/avirt_crash/
     - assets/samples/avirt_ride/
     - assets/samples/avirt_tom/
+    - assets/samples/unruly_kick/
+    - assets/samples/unruly_snare/
+    - assets/samples/unruly_hatClosed/
+    - assets/samples/unruly_hatOpen/
+    - assets/samples/unruly_crash/
+    - assets/samples/unruly_ride/
+    - assets/samples/unruly_tom/
     - assets/samples/upright/
     - assets/samples/sax/
     - assets/samples/epiano/
